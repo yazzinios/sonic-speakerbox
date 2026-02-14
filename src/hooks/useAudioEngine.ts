@@ -1,11 +1,23 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 
+export interface EQState {
+  low: number;   // -12 to 12 dB
+  mid: number;
+  high: number;
+}
+
 export interface DeckState {
   fileName: string;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
   volume: number;
+  speed: number;
+  eq: EQState;
+  loopStart: number | null;
+  loopEnd: number | null;
+  loopActive: boolean;
+  youtubeUrl: string;
 }
 
 const INITIAL_DECK: DeckState = {
@@ -14,6 +26,12 @@ const INITIAL_DECK: DeckState = {
   currentTime: 0,
   duration: 0,
   volume: 0.8,
+  speed: 1,
+  eq: { low: 0, mid: 0, high: 0 },
+  loopStart: null,
+  loopEnd: null,
+  loopActive: false,
+  youtubeUrl: '',
 };
 
 export function useAudioEngine() {
@@ -24,10 +42,12 @@ export function useAudioEngine() {
   const sourcesRef = useRef<Record<string, MediaElementAudioSourceNode>>({});
   const gainsRef = useRef<Record<string, GainNode>>({});
   const analysersRef = useRef<Record<string, AnalyserNode>>({});
+  const eqNodesRef = useRef<Record<string, { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode }>>({});
   const micGainRef = useRef<GainNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const animFrameRef = useRef<number>(0);
+  const customJingleRef = useRef<ArrayBuffer | null>(null);
 
   const [deckA, setDeckA] = useState<DeckState>({ ...INITIAL_DECK });
   const [deckB, setDeckB] = useState<DeckState>({ ...INITIAL_DECK });
@@ -50,10 +70,30 @@ export function useAudioEngine() {
 
     for (const id of ['A', 'B']) {
       const audio = new Audio();
+      audio.crossOrigin = 'anonymous';
       audioElsRef.current[id] = audio;
 
       const source = ctx.createMediaElementSource(audio);
       sourcesRef.current[id] = source;
+
+      // EQ chain: source -> low -> mid -> high -> gain -> analyser -> master
+      const low = ctx.createBiquadFilter();
+      low.type = 'lowshelf';
+      low.frequency.value = 320;
+      low.gain.value = 0;
+
+      const mid = ctx.createBiquadFilter();
+      mid.type = 'peaking';
+      mid.frequency.value = 1000;
+      mid.Q.value = 0.5;
+      mid.gain.value = 0;
+
+      const high = ctx.createBiquadFilter();
+      high.type = 'highshelf';
+      high.frequency.value = 3200;
+      high.gain.value = 0;
+
+      eqNodesRef.current[id] = { low, mid, high };
 
       const gain = ctx.createGain();
       gain.gain.value = 0.8;
@@ -63,7 +103,10 @@ export function useAudioEngine() {
       analyser.fftSize = 128;
       analysersRef.current[id] = analyser;
 
-      source.connect(gain);
+      source.connect(low);
+      low.connect(mid);
+      mid.connect(high);
+      high.connect(gain);
       gain.connect(analyser);
       analyser.connect(master);
     }
@@ -76,26 +119,27 @@ export function useAudioEngine() {
     return ctx;
   }, []);
 
-  // Time update loop
+  // Time update loop + loop enforcement
   useEffect(() => {
     const update = () => {
-      const audioA = audioElsRef.current['A'];
-      const audioB = audioElsRef.current['B'];
-      if (audioA?.duration) {
-        setDeckA(prev => ({
-          ...prev,
-          currentTime: audioA.currentTime,
-          duration: audioA.duration,
-          isPlaying: !audioA.paused,
-        }));
-      }
-      if (audioB?.duration) {
-        setDeckB(prev => ({
-          ...prev,
-          currentTime: audioB.currentTime,
-          duration: audioB.duration,
-          isPlaying: !audioB.paused,
-        }));
+      for (const [id, setter] of [['A', setDeckA], ['B', setDeckB]] as const) {
+        const audio = audioElsRef.current[id];
+        if (audio?.duration) {
+          setter(prev => {
+            // Loop enforcement
+            if (prev.loopActive && prev.loopStart !== null && prev.loopEnd !== null) {
+              if (audio.currentTime >= prev.loopEnd) {
+                audio.currentTime = prev.loopStart;
+              }
+            }
+            return {
+              ...prev,
+              currentTime: audio.currentTime,
+              duration: audio.duration,
+              isPlaying: !audio.paused,
+            };
+          });
+        }
       }
       animFrameRef.current = requestAnimationFrame(update);
     };
@@ -125,7 +169,7 @@ export function useAudioEngine() {
     audio.src = URL.createObjectURL(file);
     audio.load();
     const setter = deck === 'A' ? setDeckA : setDeckB;
-    setter(prev => ({ ...prev, fileName: file.name, currentTime: 0, duration: 0, isPlaying: false }));
+    setter(prev => ({ ...prev, fileName: file.name, currentTime: 0, duration: 0, isPlaying: false, loopStart: null, loopEnd: null, loopActive: false }));
   }, [getCtx]);
 
   const play = useCallback((deck: 'A' | 'B') => {
@@ -155,35 +199,104 @@ export function useAudioEngine() {
     setCrossfaderState(val);
   }, []);
 
+  const setEQ = useCallback((deck: 'A' | 'B', band: 'low' | 'mid' | 'high', value: number) => {
+    const eq = eqNodesRef.current[deck];
+    if (eq) {
+      eq[band].gain.value = value;
+    }
+    const setter = deck === 'A' ? setDeckA : setDeckB;
+    setter(prev => ({ ...prev, eq: { ...prev.eq, [band]: value } }));
+  }, []);
+
+  const setSpeed = useCallback((deck: 'A' | 'B', speed: number) => {
+    const audio = audioElsRef.current[deck];
+    if (audio) {
+      audio.playbackRate = speed;
+    }
+    const setter = deck === 'A' ? setDeckA : setDeckB;
+    setter(prev => ({ ...prev, speed }));
+  }, []);
+
+  const setLoopStart = useCallback((deck: 'A' | 'B') => {
+    const audio = audioElsRef.current[deck];
+    if (!audio) return;
+    const setter = deck === 'A' ? setDeckA : setDeckB;
+    setter(prev => ({ ...prev, loopStart: audio.currentTime }));
+  }, []);
+
+  const setLoopEnd = useCallback((deck: 'A' | 'B') => {
+    const audio = audioElsRef.current[deck];
+    if (!audio) return;
+    const setter = deck === 'A' ? setDeckA : setDeckB;
+    setter(prev => ({ ...prev, loopEnd: audio.currentTime, loopActive: prev.loopStart !== null }));
+  }, []);
+
+  const toggleLoop = useCallback((deck: 'A' | 'B') => {
+    const setter = deck === 'A' ? setDeckA : setDeckB;
+    setter(prev => ({ ...prev, loopActive: !prev.loopActive }));
+  }, []);
+
+  const clearLoop = useCallback((deck: 'A' | 'B') => {
+    const setter = deck === 'A' ? setDeckA : setDeckB;
+    setter(prev => ({ ...prev, loopStart: null, loopEnd: null, loopActive: false }));
+  }, []);
+
+  const setYoutubeUrl = useCallback((deck: 'A' | 'B', url: string) => {
+    const setter = deck === 'A' ? setDeckA : setDeckB;
+    setter(prev => ({ ...prev, youtubeUrl: url }));
+  }, []);
+
+  const setCustomJingle = useCallback((buffer: ArrayBuffer) => {
+    customJingleRef.current = buffer;
+  }, []);
+
   const playJingle = useCallback((): Promise<void> => {
     const ctx = getCtx();
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
       setJinglePlaying(true);
       const master = masterRef.current!;
-      const notes = [660, 660, 880];
-      const noteLen = 0.15;
-      const gap = 0.12;
-      const now = ctx.currentTime;
 
-      notes.forEach((freq, i) => {
-        const osc = ctx.createOscillator();
+      if (customJingleRef.current) {
+        // Play custom jingle from uploaded file
+        const audioBuffer = await ctx.decodeAudioData(customJingleRef.current.slice(0));
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
         const g = ctx.createGain();
-        osc.frequency.value = freq;
-        osc.type = 'sine';
-        g.gain.value = 0.3;
-        osc.connect(g);
+        g.gain.value = 0.5;
+        source.connect(g);
         g.connect(master);
-        const t = now + i * (noteLen + gap);
-        osc.start(t);
-        osc.stop(t + noteLen);
-        g.gain.setValueAtTime(0.3, t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + noteLen);
-      });
+        source.start();
+        source.onended = () => {
+          setJinglePlaying(false);
+          resolve();
+        };
+      } else {
+        // Default tan-tan-tan jingle
+        const notes = [660, 660, 880];
+        const noteLen = 0.15;
+        const gap = 0.12;
+        const now = ctx.currentTime;
 
-      setTimeout(() => {
-        setJinglePlaying(false);
-        resolve();
-      }, notes.length * (noteLen + gap) * 1000 + 100);
+        notes.forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.frequency.value = freq;
+          osc.type = 'sine';
+          g.gain.value = 0.3;
+          osc.connect(g);
+          g.connect(master);
+          const t = now + i * (noteLen + gap);
+          osc.start(t);
+          osc.stop(t + noteLen);
+          g.gain.setValueAtTime(0.3, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + noteLen);
+        });
+
+        setTimeout(() => {
+          setJinglePlaying(false);
+          resolve();
+        }, notes.length * (noteLen + gap) * 1000 + 100);
+      }
     });
   }, [getCtx]);
 
@@ -221,6 +334,31 @@ export function useAudioEngine() {
     }, 300);
   }, []);
 
+  // Play an announcement MP3 through master output
+  const playAnnouncement = useCallback(async (file: File, duckMusic: boolean = true) => {
+    const ctx = getCtx();
+    if (ctx.state === 'suspended') await ctx.resume();
+    
+    if (duckMusic) setMicDuck(0.15);
+    
+    const buffer = await file.arrayBuffer();
+    const audioBuffer = await ctx.decodeAudioData(buffer);
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    const g = ctx.createGain();
+    g.gain.value = 0.8;
+    source.connect(g);
+    g.connect(masterRef.current!);
+    source.start();
+    
+    return new Promise<void>((resolve) => {
+      source.onended = () => {
+        if (duckMusic) setMicDuck(1);
+        resolve();
+      };
+    });
+  }, [getCtx]);
+
   const getAnalyser = useCallback((deck: 'A' | 'B'): AnalyserNode | null => {
     return analysersRef.current[deck] || null;
   }, []);
@@ -233,6 +371,8 @@ export function useAudioEngine() {
   return {
     deckA, deckB, crossfader, micActive, jinglePlaying,
     loadTrack, play, pause, stop, setVolume, setCrossfader,
+    setEQ, setSpeed, setLoopStart, setLoopEnd, toggleLoop, clearLoop,
+    setYoutubeUrl, setCustomJingle, playAnnouncement,
     startMic, stopMic, getAnalyser, getOutputStream,
   };
 }

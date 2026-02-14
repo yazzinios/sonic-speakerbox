@@ -1,7 +1,8 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { Play, Pause, Square, Upload, Volume2 } from 'lucide-react';
+import { Play, Pause, Square, Upload, Volume2, ChevronDown, ChevronUp } from 'lucide-react';
+import { DeckControls } from './DeckControls';
 import type { DeckState } from '@/hooks/useAudioEngine';
 
 interface DeckProps {
@@ -13,6 +14,13 @@ interface DeckProps {
   onPause: () => void;
   onStop: () => void;
   onVolumeChange: (vol: number) => void;
+  onEQChange: (band: 'low' | 'mid' | 'high', value: number) => void;
+  onSpeedChange: (speed: number) => void;
+  onSetLoopStart: () => void;
+  onSetLoopEnd: () => void;
+  onToggleLoop: () => void;
+  onClearLoop: () => void;
+  onYoutubeUrlChange: (url: string) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -22,10 +30,11 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onVolumeChange }: DeckProps) {
+export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onVolumeChange, onEQChange, onSpeedChange, onSetLoopStart, onSetLoopEnd, onToggleLoop, onClearLoop, onYoutubeUrlChange }: DeckProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showControls, setShowControls] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -76,6 +85,10 @@ export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onV
 
       <div className="flex items-center justify-between text-xs font-mono text-muted-foreground">
         <span>{formatTime(state.currentTime)}</span>
+        <div className="flex items-center gap-2">
+          {state.speed !== 1 && <span className="text-accent">{(state.speed * 100).toFixed(0)}%</span>}
+          {state.loopActive && <span className="text-primary animate-pulse">LOOP</span>}
+        </div>
         <span>-{formatTime(Math.max(0, state.duration - state.currentTime))}</span>
       </div>
 
@@ -106,6 +119,15 @@ export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onV
         <Button size="sm" variant="outline" onClick={onStop} disabled={!state.fileName}>
           <Square className="h-3 w-3" />
         </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto text-xs"
+          onClick={() => setShowControls(!showControls)}
+        >
+          {showControls ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          <span className="ml-1">Controls</span>
+        </Button>
       </div>
 
       <div className="flex items-center gap-2">
@@ -118,6 +140,20 @@ export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onV
           className="flex-1"
         />
       </div>
+
+      {showControls && (
+        <DeckControls
+          id={id}
+          state={state}
+          onEQChange={onEQChange}
+          onSpeedChange={onSpeedChange}
+          onSetLoopStart={onSetLoopStart}
+          onSetLoopEnd={onSetLoopEnd}
+          onToggleLoop={onToggleLoop}
+          onClearLoop={onClearLoop}
+          onYoutubeUrlChange={onYoutubeUrlChange}
+        />
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Repeat, Repeat1, Gauge, X, Youtube } from 'lucide-react';
+import { YouTubeSearch } from './YouTubeSearch';
 import type { DeckState } from '@/hooks/useAudioEngine';
 
 interface DeckControlsProps {
@@ -108,8 +109,11 @@ export function DeckControls({
           <Youtube className="h-3 w-3 text-destructive" />
           <h3 className="text-xs font-bold tracking-wider text-muted-foreground">YOUTUBE</h3>
         </div>
+        <YouTubeSearch
+          onSelect={(videoId, title) => onYoutubeUrlChange(`https://www.youtube.com/watch?v=${videoId}`)}
+        />
         <Input
-          placeholder="Paste YouTube URL..."
+          placeholder="Or paste YouTube URL..."
           value={state.youtubeUrl}
           onChange={(e) => onYoutubeUrlChange(e.target.value)}
           className="text-xs h-8"

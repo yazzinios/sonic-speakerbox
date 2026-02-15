@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Megaphone, Upload, Play, Trash2, Clock, Plus } from 'lucide-react';
+import { Megaphone, Upload, Play, Trash2, Clock, Plus, Volume2 } from 'lucide-react';
 
 interface Announcement {
   id: string;
@@ -62,6 +62,15 @@ export function AnnouncementSection({ onPlayAnnouncement }: AnnouncementSectionP
     await onPlayAnnouncement(ann.file, true);
     setAnnouncements(prev => prev.map(a => a.id === ann.id ? { ...a, played: true } : a));
   }, [onPlayAnnouncement]);
+
+  const speakText = useCallback((text: string) => {
+    if (!text.trim() || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+  }, []);
 
   // Schedule checker
   useEffect(() => {
@@ -125,6 +134,11 @@ export function AnnouncementSection({ onPlayAnnouncement }: AnnouncementSectionP
               <span className="flex items-center gap-0.5 text-muted-foreground">
                 <Clock className="h-2.5 w-2.5" /> {ann.scheduledTime}
               </span>
+            )}
+            {ann.text && (
+              <Button size="sm" variant="ghost" onClick={() => speakText(ann.text)} className="h-6 w-6 p-0" title="Speak text">
+                <Volume2 className="h-3 w-3" />
+              </Button>
             )}
             <Button size="sm" variant="ghost" onClick={() => playNow(ann)} disabled={!ann.file} className="h-6 w-6 p-0">
               <Play className="h-3 w-3" />

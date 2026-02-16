@@ -5,6 +5,7 @@ import { useRequestHost } from '@/hooks/useMusicRequests';
 import { Deck } from '@/components/dj/Deck';
 import { MicSection } from '@/components/dj/MicSection';
 import { AnnouncementSection } from '@/components/dj/AnnouncementSection';
+import { StatsSection } from '@/components/dj/StatsSection';
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
 import { Users, Wifi, WifiOff, Copy, Settings, Music, X } from 'lucide-react';
@@ -129,6 +130,14 @@ const Index = () => {
 
           {/* Announcements */}
           <AnnouncementSection onPlayAnnouncement={engine.playAnnouncement} />
+
+          {/* Statistics */}
+          <StatsSection
+            deckA={engine.deckA}
+            deckB={engine.deckB}
+            micActive={engine.micActive}
+            listenerCount={listenerCount}
+          />
 
           {/* Mic & Broadcast & Requests */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

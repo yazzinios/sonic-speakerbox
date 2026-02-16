@@ -21,6 +21,8 @@ interface DeckProps {
   onToggleLoop: () => void;
   onClearLoop: () => void;
   onYoutubeUrlChange: (url: string) => void;
+  onYoutubePlay: () => void;
+  onYoutubeStop: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -30,7 +32,7 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onVolumeChange, onEQChange, onSpeedChange, onSetLoopStart, onSetLoopEnd, onToggleLoop, onClearLoop, onYoutubeUrlChange }: DeckProps) {
+export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onVolumeChange, onEQChange, onSpeedChange, onSetLoopStart, onSetLoopEnd, onToggleLoop, onClearLoop, onYoutubeUrlChange, onYoutubePlay, onYoutubeStop }: DeckProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -152,6 +154,8 @@ export function Deck({ id, state, analyser, onLoad, onPlay, onPause, onStop, onV
           onToggleLoop={onToggleLoop}
           onClearLoop={onClearLoop}
           onYoutubeUrlChange={onYoutubeUrlChange}
+          onYoutubePlay={onYoutubePlay}
+          onYoutubeStop={onYoutubeStop}
         />
       )}
     </div>

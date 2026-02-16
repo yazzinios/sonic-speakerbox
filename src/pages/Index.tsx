@@ -3,7 +3,7 @@ import { useAudioEngine } from '@/hooks/useAudioEngine';
 import { usePeerHost } from '@/hooks/usePeerStreaming';
 import { useRequestHost } from '@/hooks/useMusicRequests';
 import { Deck } from '@/components/dj/Deck';
-import { MicSection } from '@/components/dj/MicSection';
+import { MicSection, type MicTarget } from '@/components/dj/MicSection';
 import { AnnouncementSection } from '@/components/dj/AnnouncementSection';
 import { StatsSection } from '@/components/dj/StatsSection';
 import { Slider } from '@/components/ui/slider';
@@ -19,6 +19,7 @@ const Index = () => {
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [bgImage, setBgImage] = useState('');
   const [stationName, setStationName] = useState('DJ CONSOLE');
+  const [micTarget, setMicTarget] = useState<MicTarget>('all');
 
   // Load settings from localStorage
   useEffect(() => {
@@ -93,6 +94,8 @@ const Index = () => {
               onToggleLoop={() => engine.toggleLoop('A')}
               onClearLoop={() => engine.clearLoop('A')}
               onYoutubeUrlChange={(url) => engine.setYoutubeUrl('A', url)}
+              onYoutubePlay={() => engine.youtubePlay('A')}
+              onYoutubeStop={() => engine.youtubeStop('A')}
             />
             <Deck
               id="B"
@@ -110,6 +113,8 @@ const Index = () => {
               onToggleLoop={() => engine.toggleLoop('B')}
               onClearLoop={() => engine.clearLoop('B')}
               onYoutubeUrlChange={(url) => engine.setYoutubeUrl('B', url)}
+              onYoutubePlay={() => engine.youtubePlay('B')}
+              onYoutubeStop={() => engine.youtubeStop('B')}
             />
           </div>
 
@@ -129,7 +134,7 @@ const Index = () => {
           </section>
 
           {/* Announcements */}
-          <AnnouncementSection onPlayAnnouncement={engine.playAnnouncement} />
+          <AnnouncementSection onPlayAnnouncement={engine.playAnnouncement} onDuckStart={engine.duckStart} onDuckEnd={engine.duckEnd} />
 
           {/* Statistics */}
           <StatsSection
@@ -144,8 +149,10 @@ const Index = () => {
             <MicSection
               micActive={engine.micActive}
               jinglePlaying={engine.jinglePlaying}
+              micTarget={micTarget}
               onStartMic={engine.startMic}
               onStopMic={engine.stopMic}
+              onMicTargetChange={setMicTarget}
             />
 
             <section className="rounded-lg border bg-card p-4 space-y-3">

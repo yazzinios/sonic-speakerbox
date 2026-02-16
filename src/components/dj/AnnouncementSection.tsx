@@ -17,9 +17,11 @@ interface Announcement {
 
 interface AnnouncementSectionProps {
   onPlayAnnouncement: (file: File, duck?: boolean) => Promise<void>;
+  onDuckStart?: () => void;
+  onDuckEnd?: () => void;
 }
 
-export function AnnouncementSection({ onPlayAnnouncement }: AnnouncementSectionProps) {
+export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd }: AnnouncementSectionProps) {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
@@ -76,16 +78,7 @@ export function AnnouncementSection({ onPlayAnnouncement }: AnnouncementSectionP
     }
   }, []);
 
-  const playNow = useCallback(async (ann: Announcement) => {
-    if (ann.file) {
-      await onPlayAnnouncement(ann.file, true);
-    } else if (ann.text.trim()) {
-      speakText(ann.text, ann.voiceName);
-    }
-    setAnnouncements(prev => prev.map(a => a.id === ann.id ? { ...a, played: true } : a));
-  }, [onPlayAnnouncement]);
-
-  const speakText = useCallback((text: string, voiceName?: string) => {
+  const speakText = useCallback((text: string, voiceName?: string, duck: boolean = false) => {
     if (!text.trim() || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
@@ -95,8 +88,21 @@ export function AnnouncementSection({ onPlayAnnouncement }: AnnouncementSectionP
       const voice = voices.find(v => v.name === voiceName);
       if (voice) utterance.voice = voice;
     }
+    if (duck) onDuckStart?.();
+    utterance.onend = () => {
+      if (duck) onDuckEnd?.();
+    };
     window.speechSynthesis.speak(utterance);
-  }, [voices]);
+  }, [voices, onDuckStart, onDuckEnd]);
+
+  const playNow = useCallback(async (ann: Announcement) => {
+    if (ann.file) {
+      await onPlayAnnouncement(ann.file, true);
+    } else if (ann.text.trim()) {
+      speakText(ann.text, ann.voiceName, true);
+    }
+    setAnnouncements(prev => prev.map(a => a.id === ann.id ? { ...a, played: true } : a));
+  }, [onPlayAnnouncement, speakText]);
 
   // Schedule checker
   useEffect(() => {

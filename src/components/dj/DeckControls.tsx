@@ -1,7 +1,7 @@
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Repeat, Repeat1, Gauge, X, Youtube } from 'lucide-react';
+import { Repeat, Repeat1, Gauge, X, Youtube, Play, Square } from 'lucide-react';
 import { YouTubeSearch } from './YouTubeSearch';
 import type { DeckState } from '@/hooks/useAudioEngine';
 
@@ -15,6 +15,8 @@ interface DeckControlsProps {
   onToggleLoop: () => void;
   onClearLoop: () => void;
   onYoutubeUrlChange: (url: string) => void;
+  onYoutubePlay: () => void;
+  onYoutubeStop: () => void;
 }
 
 function extractYoutubeId(url: string): string | null {
@@ -25,7 +27,7 @@ function extractYoutubeId(url: string): string | null {
 export function DeckControls({
   id, state, onEQChange, onSpeedChange,
   onSetLoopStart, onSetLoopEnd, onToggleLoop, onClearLoop,
-  onYoutubeUrlChange
+  onYoutubeUrlChange, onYoutubePlay, onYoutubeStop
 }: DeckControlsProps) {
   const accentClass = id === 'A' ? 'text-primary' : 'text-accent';
   const youtubeId = extractYoutubeId(state.youtubeUrl);
@@ -119,19 +121,30 @@ export function DeckControls({
           className="text-xs h-8"
         />
         {youtubeId && (
-          <div className="aspect-video rounded overflow-hidden">
-            <iframe
-              src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1`}
-              className="w-full h-full"
-              allow="autoplay; encrypted-media"
-              allowFullScreen
-              title={`YouTube Deck ${id}`}
-            />
-          </div>
+          <>
+            <div className="aspect-video rounded overflow-hidden relative">
+              <iframe
+                id={`yt-player-${id}`}
+                src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1&origin=${window.location.origin}`}
+                className="w-full h-full"
+                allow="autoplay; encrypted-media"
+                allowFullScreen
+                title={`YouTube Deck ${id}`}
+              />
+            </div>
+            <div className="flex gap-1">
+              <Button size="sm" variant="outline" onClick={onYoutubePlay} className="flex-1 text-xs">
+                <Play className="h-3 w-3 mr-1" /> Play on Deck
+              </Button>
+              <Button size="sm" variant="outline" onClick={onYoutubeStop} className="text-xs">
+                <Square className="h-3 w-3" />
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              YouTube audio plays through deck — volume & crossfader apply.
+            </p>
+          </>
         )}
-        <p className="text-[10px] text-muted-foreground">
-          YouTube plays separately — use for preview/reference.
-        </p>
       </div>
     </div>
   );

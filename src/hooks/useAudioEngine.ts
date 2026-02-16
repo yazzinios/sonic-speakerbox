@@ -246,6 +246,25 @@ export function useAudioEngine() {
     setter(prev => ({ ...prev, youtubeUrl: url }));
   }, []);
 
+  // YouTube iframe control via postMessage
+  const youtubePlay = useCallback((deck: 'A' | 'B') => {
+    const iframe = document.getElementById(`yt-player-${deck}`) as HTMLIFrameElement | null;
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+      const setter = deck === 'A' ? setDeckA : setDeckB;
+      setter(prev => ({ ...prev, fileName: prev.youtubeUrl ? `YouTube (Deck ${deck})` : prev.fileName, isPlaying: true }));
+    }
+  }, []);
+
+  const youtubeStop = useCallback((deck: 'A' | 'B') => {
+    const iframe = document.getElementById(`yt-player-${deck}`) as HTMLIFrameElement | null;
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage('{"event":"command","func":"stopVideo","args":""}', '*');
+      const setter = deck === 'A' ? setDeckA : setDeckB;
+      setter(prev => ({ ...prev, isPlaying: false }));
+    }
+  }, []);
+
   const setCustomJingle = useCallback((buffer: ArrayBuffer) => {
     customJingleRef.current = buffer;
   }, []);
@@ -368,11 +387,14 @@ export function useAudioEngine() {
     return streamDestRef.current?.stream || null;
   }, [getCtx]);
 
+  const duckStart = useCallback(() => setMicDuck(0.15), []);
+  const duckEnd = useCallback(() => setMicDuck(1), []);
+
   return {
     deckA, deckB, crossfader, micActive, jinglePlaying,
     loadTrack, play, pause, stop, setVolume, setCrossfader,
     setEQ, setSpeed, setLoopStart, setLoopEnd, toggleLoop, clearLoop,
-    setYoutubeUrl, setCustomJingle, playAnnouncement,
-    startMic, stopMic, getAnalyser, getOutputStream,
+    setYoutubeUrl, youtubePlay, youtubeStop, setCustomJingle, playAnnouncement,
+    startMic, stopMic, getAnalyser, getOutputStream, duckStart, duckEnd,
   };
 }

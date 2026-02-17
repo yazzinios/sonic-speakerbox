@@ -4,9 +4,11 @@ import { Input } from '@/components/ui/input';
 import { Repeat, Repeat1, Gauge, X, Youtube, Play, Square } from 'lucide-react';
 import { YouTubeSearch } from './YouTubeSearch';
 import type { DeckState } from '@/hooks/useAudioEngine';
+import type { DeckId } from '@/types/channels';
+import { DECK_COLORS } from '@/types/channels';
 
 interface DeckControlsProps {
-  id: 'A' | 'B';
+  id: DeckId;
   state: DeckState;
   onEQChange: (band: 'low' | 'mid' | 'high', value: number) => void;
   onSpeedChange: (speed: number) => void;
@@ -24,12 +26,8 @@ function extractYoutubeId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-export function DeckControls({
-  id, state, onEQChange, onSpeedChange,
-  onSetLoopStart, onSetLoopEnd, onToggleLoop, onClearLoop,
-  onYoutubeUrlChange, onYoutubePlay, onYoutubeStop
-}: DeckControlsProps) {
-  const accentClass = id === 'A' ? 'text-primary' : 'text-accent';
+export function DeckControls({ id, state, onEQChange, onSpeedChange, onSetLoopStart, onSetLoopEnd, onToggleLoop, onClearLoop, onYoutubeUrlChange, onYoutubePlay, onYoutubeStop }: DeckControlsProps) {
+  const accentClass = DECK_COLORS[id].class;
   const youtubeId = extractYoutubeId(state.youtubeUrl);
 
   return (
@@ -41,15 +39,8 @@ export function DeckControls({
           {(['low', 'mid', 'high'] as const).map(band => (
             <div key={band} className="space-y-1">
               <label className="text-[10px] text-muted-foreground uppercase font-bold">{band}</label>
-              <Slider
-                orientation="vertical"
-                value={[state.eq[band]]}
-                min={-12}
-                max={12}
-                step={0.5}
-                onValueChange={([v]) => onEQChange(band, v)}
-                className="h-16 mx-auto"
-              />
+              <Slider orientation="vertical" value={[state.eq[band]]} min={-12} max={12} step={0.5}
+                onValueChange={([v]) => onEQChange(band, v)} className="h-16 mx-auto" />
               <span className="text-[10px] text-muted-foreground font-mono block text-center">{state.eq[band] > 0 ? '+' : ''}{state.eq[band]}dB</span>
             </div>
           ))}
@@ -63,45 +54,24 @@ export function DeckControls({
           <h3 className="text-xs font-bold tracking-wider text-muted-foreground">SPEED</h3>
           <span className="text-xs font-mono text-muted-foreground ml-auto">{(state.speed * 100).toFixed(0)}%</span>
         </div>
-        <Slider
-          value={[state.speed * 100]}
-          min={50}
-          max={200}
-          step={1}
-          onValueChange={([v]) => onSpeedChange(v / 100)}
-        />
-        <Button size="sm" variant="ghost" className="text-xs w-full" onClick={() => onSpeedChange(1)}>
-          Reset to 100%
-        </Button>
+        <Slider value={[state.speed * 100]} min={50} max={200} step={1} onValueChange={([v]) => onSpeedChange(v / 100)} />
+        <Button size="sm" variant="ghost" className="text-xs w-full" onClick={() => onSpeedChange(1)}>Reset to 100%</Button>
       </div>
 
       {/* Loop */}
       <div className="rounded-lg border bg-card p-3 space-y-2">
         <h3 className="text-xs font-bold tracking-wider text-muted-foreground">LOOP</h3>
         <div className="flex gap-1">
-          <Button size="sm" variant="outline" onClick={onSetLoopStart} className="flex-1 text-xs">
-            IN
-          </Button>
-          <Button size="sm" variant="outline" onClick={onSetLoopEnd} className="flex-1 text-xs">
-            OUT
-          </Button>
-          <Button
-            size="sm"
-            variant={state.loopActive ? 'default' : 'outline'}
-            onClick={onToggleLoop}
-            disabled={state.loopStart === null || state.loopEnd === null}
-            className="text-xs"
-          >
+          <Button size="sm" variant="outline" onClick={onSetLoopStart} className="flex-1 text-xs">IN</Button>
+          <Button size="sm" variant="outline" onClick={onSetLoopEnd} className="flex-1 text-xs">OUT</Button>
+          <Button size="sm" variant={state.loopActive ? 'default' : 'outline'} onClick={onToggleLoop}
+            disabled={state.loopStart === null || state.loopEnd === null} className="text-xs">
             {state.loopActive ? <Repeat1 className="h-3 w-3" /> : <Repeat className="h-3 w-3" />}
           </Button>
-          <Button size="sm" variant="ghost" onClick={onClearLoop} className="text-xs">
-            <X className="h-3 w-3" />
-          </Button>
+          <Button size="sm" variant="ghost" onClick={onClearLoop} className="text-xs"><X className="h-3 w-3" /></Button>
         </div>
         {state.loopStart !== null && state.loopEnd !== null && (
-          <p className="text-[10px] text-muted-foreground font-mono text-center">
-            {state.loopStart.toFixed(1)}s → {state.loopEnd.toFixed(1)}s
-          </p>
+          <p className="text-[10px] text-muted-foreground font-mono text-center">{state.loopStart.toFixed(1)}s → {state.loopEnd.toFixed(1)}s</p>
         )}
       </div>
 
@@ -111,38 +81,18 @@ export function DeckControls({
           <Youtube className="h-3 w-3 text-destructive" />
           <h3 className="text-xs font-bold tracking-wider text-muted-foreground">YOUTUBE</h3>
         </div>
-        <YouTubeSearch
-          onSelect={(videoId, title) => onYoutubeUrlChange(`https://www.youtube.com/watch?v=${videoId}`)}
-        />
-        <Input
-          placeholder="Or paste YouTube URL..."
-          value={state.youtubeUrl}
-          onChange={(e) => onYoutubeUrlChange(e.target.value)}
-          className="text-xs h-8"
-        />
+        <YouTubeSearch onSelect={(videoId) => onYoutubeUrlChange(`https://www.youtube.com/watch?v=${videoId}`)} />
+        <Input placeholder="Or paste YouTube URL..." value={state.youtubeUrl} onChange={(e) => onYoutubeUrlChange(e.target.value)} className="text-xs h-8" />
         {youtubeId && (
           <>
             <div className="aspect-video rounded overflow-hidden relative">
-              <iframe
-                id={`yt-player-${id}`}
-                src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1&origin=${window.location.origin}`}
-                className="w-full h-full"
-                allow="autoplay; encrypted-media"
-                allowFullScreen
-                title={`YouTube Deck ${id}`}
-              />
+              <iframe id={`yt-player-${id}`} src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1&origin=${window.location.origin}`}
+                className="w-full h-full" allow="autoplay; encrypted-media" allowFullScreen title={`YouTube Deck ${id}`} />
             </div>
             <div className="flex gap-1">
-              <Button size="sm" variant="outline" onClick={onYoutubePlay} className="flex-1 text-xs">
-                <Play className="h-3 w-3 mr-1" /> Play on Deck
-              </Button>
-              <Button size="sm" variant="outline" onClick={onYoutubeStop} className="text-xs">
-                <Square className="h-3 w-3" />
-              </Button>
+              <Button size="sm" variant="outline" onClick={onYoutubePlay} className="flex-1 text-xs"><Play className="h-3 w-3 mr-1" /> Play</Button>
+              <Button size="sm" variant="outline" onClick={onYoutubeStop} className="text-xs"><Square className="h-3 w-3" /></Button>
             </div>
-            <p className="text-[10px] text-muted-foreground">
-              YouTube audio plays through deck — volume & crossfader apply.
-            </p>
           </>
         )}
       </div>

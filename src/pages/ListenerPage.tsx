@@ -1,17 +1,33 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { usePeerListener } from '@/hooks/usePeerStreaming';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Headphones, Wifi, WifiOff, Volume2 } from 'lucide-react';
+import { getChannels } from '@/types/channels';
 
 const ListenerPage = () => {
   const { isConnected, connect, disconnect, setListenerVolume } = usePeerListener();
-  const [hostId, setHostId] = useState('');
+  const [channelCode, setChannelCode] = useState('');
   const [volume, setVolume] = useState(80);
+  const [channelName, setChannelName] = useState('');
+  const [bgImage, setBgImage] = useState('');
 
+  // Find channel by code when connecting
   const handleConnect = () => {
-    if (hostId.trim()) connect(hostId.trim());
+    const code = channelCode.trim();
+    if (!code) return;
+    
+    const channels = getChannels();
+    const channel = channels.find(c => c.code === code);
+    
+    if (channel) {
+      setChannelName(channel.name);
+      setBgImage(channel.bgImage);
+    }
+    
+    // Use the code as the peer ID to connect
+    connect(code);
   };
 
   const handleVolumeChange = ([v]: number[]) => {
@@ -20,52 +36,48 @@ const ListenerPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <div className="w-full max-w-md space-y-6">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4"
+      style={bgImage ? { backgroundImage: `url(${bgImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
+      {bgImage && <div className="fixed inset-0 bg-background/70 backdrop-blur-sm" />}
+      <div className="relative z-10 w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
           <Headphones className="h-12 w-12 mx-auto text-primary" />
-          <h1 className="text-2xl font-bold text-foreground tracking-[0.2em]">DJ LISTENER</h1>
-          <p className="text-sm text-muted-foreground">Connect to a live broadcast</p>
+          <h1 className="text-2xl font-bold text-foreground tracking-[0.2em]">
+            {channelName || 'DJ LISTENER'}
+          </h1>
+          <p className="text-sm text-muted-foreground">Enter your channel code to connect</p>
         </div>
 
         <div className="rounded-lg border bg-card p-6 space-y-4">
           {!isConnected ? (
             <>
               <Input
-                placeholder="Enter broadcaster ID..."
-                value={hostId}
-                onChange={(e) => setHostId(e.target.value)}
+                placeholder="Enter channel code..."
+                value={channelCode}
+                onChange={(e) => setChannelCode(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
-                className="font-mono"
+                className="font-mono text-center text-lg tracking-wider"
               />
-              <Button onClick={handleConnect} disabled={!hostId.trim()} className="w-full">
-                <Wifi className="h-4 w-4 mr-1" />
-                Connect &amp; Listen
+              <Button onClick={handleConnect} disabled={!channelCode.trim()} className="w-full">
+                <Wifi className="h-4 w-4 mr-1" /> Connect &amp; Listen
               </Button>
             </>
           ) : (
             <>
               <div className="flex items-center justify-center">
                 <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/20 text-primary text-sm font-bold animate-pulse">
-                  <Wifi className="h-3 w-3" />
-                  NOW BROADCASTING
+                  <Wifi className="h-3 w-3" /> NOW BROADCASTING
                 </span>
               </div>
-
+              {channelName && (
+                <p className="text-center text-sm text-muted-foreground">Connected to <span className="text-foreground font-bold">{channelName}</span></p>
+              )}
               <div className="flex items-center gap-2">
                 <Volume2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                <Slider
-                  value={[volume]}
-                  max={100}
-                  step={1}
-                  onValueChange={handleVolumeChange}
-                  className="flex-1"
-                />
+                <Slider value={[volume]} max={100} step={1} onValueChange={handleVolumeChange} className="flex-1" />
               </div>
-
               <Button variant="outline" onClick={disconnect} className="w-full">
-                <WifiOff className="h-4 w-4 mr-1" />
-                Disconnect
+                <WifiOff className="h-4 w-4 mr-1" /> Disconnect
               </Button>
             </>
           )}

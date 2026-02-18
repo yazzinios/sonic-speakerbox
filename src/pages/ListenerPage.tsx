@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { usePeerListener } from '@/hooks/usePeerStreaming';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Headphones, Wifi, WifiOff, Volume2 } from 'lucide-react';
-import { getChannels } from '@/types/channels';
 
 const ListenerPage = () => {
   const { isConnected, connect, disconnect, setListenerVolume } = usePeerListener();
@@ -13,20 +13,22 @@ const ListenerPage = () => {
   const [channelName, setChannelName] = useState('');
   const [bgImage, setBgImage] = useState('');
 
-  // Find channel by code when connecting
-  const handleConnect = () => {
+  const handleConnect = async () => {
     const code = channelCode.trim();
     if (!code) return;
-    
-    const channels = getChannels();
-    const channel = channels.find(c => c.code === code);
-    
-    if (channel) {
-      setChannelName(channel.name);
-      setBgImage(channel.bgImage);
+
+    // Look up channel from cloud database
+    const { data } = await supabase
+      .from('channels')
+      .select('name, bg_image')
+      .eq('code', code)
+      .maybeSingle();
+
+    if (data) {
+      setChannelName(data.name);
+      setBgImage(data.bg_image || '');
     }
-    
-    // Use the code as the peer ID to connect
+
     connect(code);
   };
 

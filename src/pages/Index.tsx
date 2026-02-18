@@ -2,37 +2,32 @@ import { useState, useEffect } from 'react';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
 import { usePeerHost } from '@/hooks/usePeerStreaming';
 import { useRequestHost } from '@/hooks/useMusicRequests';
+import { useAuth } from '@/hooks/useAuth';
+import { useCloudSettings } from '@/hooks/useCloudSettings';
 import { Deck } from '@/components/dj/Deck';
 import { MicSection, type MicTarget } from '@/components/dj/MicSection';
 import { AnnouncementSection } from '@/components/dj/AnnouncementSection';
 import { StatsSection } from '@/components/dj/StatsSection';
 import { Button } from '@/components/ui/button';
-import { Users, Wifi, WifiOff, Copy, Settings, Music, X } from 'lucide-react';
+import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
-import { ALL_DECKS, getChannels, DECK_COLORS, type DeckId } from '@/types/channels';
+import { ALL_DECKS, DECK_COLORS, type DeckId } from '@/types/channels';
 
 const Index = () => {
   const engine = useAudioEngine();
   const navigate = useNavigate();
+  const { signOut } = useAuth();
+  const { settings, channels, loading: settingsLoading } = useCloudSettings();
   const { peerId, listenerCount, isHosting, startHosting, stopHosting } = usePeerHost();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
-  const [bgImage, setBgImage] = useState('');
-  const [stationName, setStationName] = useState('DJ CONSOLE');
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
 
-  const channels = getChannels();
-
   useEffect(() => {
-    const bg = localStorage.getItem('dj-bg') || '';
-    const station = localStorage.getItem('dj-station') || 'DJ CONSOLE';
-    const jingleData = localStorage.getItem('dj-jingle');
-    setBgImage(bg);
-    setStationName(station);
-    if (jingleData) {
-      fetch(jingleData).then(r => r.arrayBuffer()).then(buffer => engine.setCustomJingle(buffer)).catch(() => {});
+    if (settings.jingle_url) {
+      fetch(settings.jingle_url).then(r => r.arrayBuffer()).then(buffer => engine.setCustomJingle(buffer)).catch(() => {});
     }
-  }, []);
+  }, [settings.jingle_url]);
 
   const handleStartBroadcast = () => {
     const stream = engine.getOutputStream();
@@ -62,13 +57,14 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background p-3 md:p-4"
-      style={bgImage ? { backgroundImage: `url(${bgImage})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' } : undefined}>
-      {bgImage && <div className="fixed inset-0 bg-background/80 backdrop-blur-sm -z-0" />}
+      style={settings.bg_image ? { backgroundImage: `url(${settings.bg_image})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' } : undefined}>
+      {settings.bg_image && <div className="fixed inset-0 bg-background/80 backdrop-blur-sm -z-0" />}
       <div className="relative z-10">
         <header className="text-center mb-4">
           <div className="flex items-center justify-center gap-3">
-            <h1 className="text-2xl font-bold text-primary tracking-[0.3em]">{stationName}</h1>
+            <h1 className="text-2xl font-bold text-primary tracking-[0.3em]">{settings.station_name}</h1>
             <Button size="sm" variant="ghost" onClick={() => navigate('/settings')}><Settings className="h-4 w-4" /></Button>
+            <Button size="sm" variant="ghost" onClick={signOut}><LogOut className="h-4 w-4" /></Button>
           </div>
           <p className="text-xs text-muted-foreground mt-1">4-Channel DJ Console</p>
         </header>

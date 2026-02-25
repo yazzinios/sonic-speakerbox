@@ -13,7 +13,8 @@ services:
       - "8083:80"
     restart: always
     networks:
-      - sonicbeat-net
+      sonicbeat-net:
+        ipv4_address: 10.10.0.2
     depends_on:
       - hls-server
 
@@ -28,12 +29,17 @@ services:
       - sonicbeat-hls:/tmp/hls
     restart: always
     networks:
-      - sonicbeat-net
+      sonicbeat-net:
+        ipv4_address: 10.10.0.3
 
 networks:
   sonicbeat-net:
     name: sonicbeat-net
     driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
+          gateway: 10.10.0.1
 
 volumes:
   sonicbeat-hls:

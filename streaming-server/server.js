@@ -17,101 +17,151 @@ const DECKS = ['A', 'B', 'C', 'D'];
 
 // Ensure HLS directories exist for each deck
 DECKS.forEach(deck => {
-  const dir = path.join(HLS_DIR, deck.toLowerCase());
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(path.join(HLS_DIR, deck.toLowerCase()), { recursive: true });
 });
 
-// Track active ffmpeg processes per deck
-const ffmpegProcesses = {};
-const broadcasterSockets = {};
+// Track state per deck
+const state = {};
+DECKS.forEach(deck => {
+  state[deck] = {
+    ffmpeg: null,
+    socket: null,
+    restarting: false,
+  };
+});
 
-// Start ffmpeg HLS process for a deck
 function startFFmpeg(deck) {
-  if (ffmpegProcesses[deck]) return;
+  const s = state[deck];
+  if (s.ffmpeg) return s.ffmpeg;
 
   const outDir = path.join(HLS_DIR, deck.toLowerCase());
   const playlistPath = path.join(outDir, 'stream.m3u8');
 
-  console.log(`[${deck}] Starting ffmpeg HLS...`);
+  console.log(`[${deck}] Starting ffmpeg...`);
 
   const ffmpeg = spawn('ffmpeg', [
-    '-re',
-    '-f', 'webm',           // input format from MediaRecorder
-    '-i', 'pipe:0',         // read from stdin
-    '-c:a', 'aac',          // encode to AAC
-    '-b:a', '128k',         // 128kbps
-    '-ac', '2',             // stereo
-    '-ar', '44100',         // sample rate
-    '-f', 'hls',            // output HLS
-    '-hls_time', '2',       // 2 second segments
-    '-hls_list_size', '10', // keep last 10 segments
-    '-hls_flags', 'delete_segments+append_list',
-    '-hls_segment_filename', path.join(outDir, 'seg%03d.ts'),
+    '-fflags', '+genpts+igndts',  // fix timestamp issues on reconnect
+    '-f', 'webm',
+    '-i', 'pipe:0',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ac', '2',
+    '-ar', '44100',
+    '-f', 'hls',
+    '-hls_time', '2',
+    '-hls_list_size', '10',
+    '-hls_flags', 'delete_segments+append_list+independent_segments',
+    '-hls_segment_type', 'mpegts',
+    '-hls_segment_filename', path.join(outDir, 'seg%05d.ts'),
+    '-y',  // overwrite output files
     playlistPath
-  ]);
+  ], {
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+
+  ffmpeg.stdout.on('data', () => {});
 
   ffmpeg.stderr.on('data', (data) => {
-    // console.log(`[ffmpeg ${deck}] ${data}`);
+    const msg = data.toString();
+    // Only log errors not routine info
+    if (msg.includes('Error') || msg.includes('error') || msg.includes('Invalid')) {
+      console.error(`[ffmpeg ${deck}] ${msg.trim()}`);
+    }
+  });
+
+  ffmpeg.stdin.on('error', (err) => {
+    if (err.code !== 'EPIPE') {
+      console.error(`[${deck}] ffmpeg stdin error:`, err.message);
+    }
   });
 
   ffmpeg.on('close', (code) => {
-    console.log(`[${deck}] ffmpeg exited with code ${code}`);
-    delete ffmpegProcesses[deck];
+    console.log(`[${deck}] ffmpeg exited (code ${code})`);
+    s.ffmpeg = null;
+
+    // If socket still connected, restart ffmpeg
+    if (s.socket && s.socket.readyState === WebSocket.OPEN && !s.restarting) {
+      s.restarting = true;
+      console.log(`[${deck}] Restarting ffmpeg in 1s...`);
+      setTimeout(() => {
+        s.restarting = false;
+        if (s.socket && s.socket.readyState === WebSocket.OPEN) {
+          s.ffmpeg = startFFmpeg(deck);
+        }
+      }, 1000);
+    }
   });
 
-  ffmpegProcesses[deck] = ffmpeg;
+  s.ffmpeg = ffmpeg;
   return ffmpeg;
 }
 
-// Stop ffmpeg for a deck
 function stopFFmpeg(deck) {
-  if (ffmpegProcesses[deck]) {
-    ffmpegProcesses[deck].kill('SIGTERM');
-    delete ffmpegProcesses[deck];
+  const s = state[deck];
+  if (s.ffmpeg) {
+    try { s.ffmpeg.stdin.end(); } catch (_) {}
+    try { s.ffmpeg.kill('SIGTERM'); } catch (_) {}
+    s.ffmpeg = null;
     console.log(`[${deck}] ffmpeg stopped`);
   }
 }
 
-// WebSocket: DJ broadcaster connects and sends audio chunks
+// WebSocket handler
 wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, `http://localhost`);
+  const url = new URL(req.url, 'http://localhost');
   const deck = url.searchParams.get('deck')?.toUpperCase();
-  const type = url.searchParams.get('type'); // 'broadcast'
+  const type = url.searchParams.get('type');
 
   if (!deck || !DECKS.includes(deck) || type !== 'broadcast') {
     ws.close();
     return;
   }
 
-  console.log(`[${deck}] Broadcaster connected`);
-  broadcasterSockets[deck] = ws;
+  const s = state[deck];
 
+  // Close previous socket if any
+  if (s.socket && s.socket !== ws) {
+    console.log(`[${deck}] Replacing old broadcaster connection`);
+    s.socket.close();
+  }
+
+  console.log(`[${deck}] Broadcaster connected`);
+  s.socket = ws;
+
+  // Start fresh ffmpeg
+  stopFFmpeg(deck);
   const ffmpeg = startFFmpeg(deck);
 
   ws.on('message', (data) => {
-    if (ffmpeg && ffmpeg.stdin.writable) {
-      ffmpeg.stdin.write(data);
+    if (s.ffmpeg && s.ffmpeg.stdin.writable) {
+      try {
+        s.ffmpeg.stdin.write(Buffer.from(data));
+      } catch (err) {
+        // ignore write errors — ffmpeg may be restarting
+      }
     }
   });
 
   ws.on('close', () => {
     console.log(`[${deck}] Broadcaster disconnected`);
-    delete broadcasterSockets[deck];
-    stopFFmpeg(deck);
+    if (s.socket === ws) {
+      s.socket = null;
+      stopFFmpeg(deck);
+    }
   });
 
   ws.on('error', (err) => {
-    console.error(`[${deck}] WebSocket error:`, err);
-    stopFFmpeg(deck);
+    console.error(`[${deck}] WS error:`, err.message);
+    ws.close();
   });
 });
 
-// Serve HLS files to listeners
+// Serve HLS files
 app.use('/hls', express.static(HLS_DIR, {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.m3u8')) {
       res.set('Content-Type', 'application/vnd.apple.mpegurl');
-      res.set('Cache-Control', 'no-cache, no-store');
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
     } else if (filePath.endsWith('.ts')) {
       res.set('Content-Type', 'video/mp2t');
       res.set('Cache-Control', 'public, max-age=60');
@@ -119,17 +169,20 @@ app.use('/hls', express.static(HLS_DIR, {
   }
 }));
 
-// Status endpoint — which decks are currently live
+// Status: which decks are live
 app.get('/status', (req, res) => {
   const live = {};
   DECKS.forEach(deck => {
     const playlistPath = path.join(HLS_DIR, deck.toLowerCase(), 'stream.m3u8');
-    live[deck] = !!broadcasterSockets[deck] && fs.existsSync(playlistPath);
+    live[deck] = !!(state[deck].socket) && fs.existsSync(playlistPath);
   });
   res.json({ live });
 });
 
+// Health check
+app.get('/health', (req, res) => res.json({ ok: true }));
+
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`SonicBeat Streaming Server running on port ${PORT}`);
 });

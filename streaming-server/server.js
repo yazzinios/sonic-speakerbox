@@ -7,11 +7,15 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+// Allow WS connections from any origin (needed when frontend is on a different port/host)
+const wss = new WebSocket.Server({
+  server,
+  verifyClient: ({ origin }, cb) => cb(true),
+});
 
 const HLS_DIR = '/tmp/hls';
 const DECKS = ['A', 'B', 'C', 'D'];
@@ -167,19 +171,14 @@ wss.on('connection', (ws, req) => {
   console.log(`[${deck}] Broadcaster connected`);
   s.socket = ws;
 
-  // Always restart ffmpeg fresh on new connection — the browser sends a fresh
-  // WebM stream with a new header, so ffmpeg MUST be restarted to parse it.
-  // The old HLS segments remain on disk so listeners get a seamless ~2s gap at most.
+  // If ffmpeg is already running (grace period reconnect), keep it alive — do NOT restart.
+  // The client will be sending a fresh WebM stream but ffmpeg handles a brief gap fine.
+  // Only restart ffmpeg if it has actually stopped (crashed or grace period expired).
   if (s.ffmpeg) {
-    console.log(`[${deck}] Restarting ffmpeg for fresh WebM stream from reconnected broadcaster`);
-    stopFFmpeg(deck);
-    // Brief pause to let ffmpeg fully exit before spawning new instance
-    setTimeout(() => {
-      if (s.socket && s.socket.readyState === WebSocket.OPEN) {
-        startFFmpeg(deck);
-      }
-    }, 300);
+    console.log(`[${deck}] ffmpeg already running — reusing for reconnected broadcaster (no restart)`);
+    // Nothing to do — ws.on('message') will resume piping data into the existing ffmpeg stdin
   } else {
+    console.log(`[${deck}] ffmpeg not running — starting fresh for new broadcaster`);
     startFFmpeg(deck);
   }
 

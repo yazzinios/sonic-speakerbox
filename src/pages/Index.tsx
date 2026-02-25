@@ -13,6 +13,7 @@ import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut } from 'lucide-r
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { ALL_DECKS, DECK_COLORS, type DeckId } from '@/types/channels';
+import { STREAMING_SERVER } from '@/lib/streamingServer';
 
 const Index = () => {
   const engine = useAudioEngine();
@@ -35,7 +36,7 @@ const Index = () => {
   useEffect(() => {
     const checkServerStream = async () => {
       try {
-        const res = await fetch('/deck-info', { signal: AbortSignal.timeout(3000) });
+        const res = await fetch(`${STREAMING_SERVER}/deck-info`, { signal: AbortSignal.timeout(3000) });
         if (!res.ok) return;
         const info = await res.json();
         const anyStreaming = Object.values(info).some((d: any) => d.streaming);
@@ -60,7 +61,7 @@ const Index = () => {
     }
     // Verify streaming server is reachable before connecting WebSockets
     try {
-      const res = await fetch('/health', { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${STREAMING_SERVER}/health`, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) throw new Error('unhealthy');
     } catch {
       toast.error('Streaming server is not reachable. Make sure it is running on port 3001.');

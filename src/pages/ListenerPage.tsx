@@ -8,8 +8,7 @@ import { Headphones, Wifi, WifiOff, Volume2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Hls from 'hls.js';
 
-// HTTP requests go through nginx proxy on same origin
-const STREAMING_SERVER = window.location.origin;
+import { STREAMING_SERVER } from '@/lib/streamingServer';
 
 const ListenerPage = () => {
   const [searchParams] = useSearchParams();
@@ -22,6 +21,8 @@ const ListenerPage = () => {
   const [needsUserGesture, setNeedsUserGesture] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamUrlRef = useRef<string>('');
 
   // Auto-connect if code is in URL
   useEffect(() => {
@@ -73,36 +74,61 @@ const ListenerPage = () => {
   };
 
   const connectHLS = (streamUrl: string) => {
+    streamUrlRef.current = streamUrl;
+
     if (!audioRef.current) {
       audioRef.current = new Audio();
     }
     const audio = audioRef.current;
     audio.volume = volume / 100;
 
+    // Destroy old HLS instance if any
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
     if (Hls.isSupported()) {
       const hls = new Hls({
         lowLatencyMode: true,
         backBufferLength: 10,
+        // Retry aggressively on manifest/segment fetch errors (DJ refresh, grace period)
+        manifestLoadingMaxRetry: 20,
+        levelLoadingMaxRetry: 20,
+        fragLoadingMaxRetry: 20,
+        manifestLoadingRetryDelay: 2000,
+        levelLoadingRetryDelay: 2000,
+        fragLoadingRetryDelay: 2000,
       });
       hlsRef.current = hls;
       hls.loadSource(streamUrl);
       hls.attachMedia(audio);
+
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         audio.play()
           .then(() => { setIsConnected(true); setIsLoading(false); })
           .catch(() => { setNeedsUserGesture(true); setIsConnected(true); setIsLoading(false); });
       });
+
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            // Network error (DJ reloaded / grace period) — try to recover
-            console.warn('[HLS] Fatal network error, attempting recovery...');
-            hls.startLoad();
-          } else {
-            toast.error('Stream error. The DJ may have stopped broadcasting.');
-            setIsConnected(false);
-            setIsLoading(false);
-          }
+        if (!data.fatal) return;
+
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          // DJ may have briefly refreshed — keep retrying silently
+          console.warn('[HLS] Network error, retrying...');
+          hls.startLoad();
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          console.warn('[HLS] Media error, recovering...');
+          hls.recoverMediaError();
+        } else {
+          // Fatal unrecoverable error — wait 5s and reconnect from scratch
+          console.error('[HLS] Fatal error, will reconnect in 5s...', data);
+          hls.destroy();
+          hlsRef.current = null;
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = setTimeout(() => {
+            connectHLS(streamUrlRef.current);
+          }, 5000);
         }
       });
     } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
@@ -122,12 +148,14 @@ const ListenerPage = () => {
   };
 
   const disconnect = () => {
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
     hlsRef.current?.destroy();
     hlsRef.current = null;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = '';
     }
+    streamUrlRef.current = '';
     setIsConnected(false);
     setNeedsUserGesture(false);
   };

@@ -3,13 +3,7 @@ import type { DeckId } from '@/types/channels';
 import { ALL_DECKS } from '@/types/channels';
 import { toast } from 'sonner';
 
-// Always connect directly to the streaming server.
-// In dev the Vite proxy forwards /ws → 3001, but in production there is no proxy,
-// so we hard-wire the streaming-server port here.
-const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
-// Use the same hostname but always target port 3001 directly.
-const WS_HOST = `${window.location.hostname}:3001`;
-const WS_SERVER = `${WS_PROTOCOL}://${WS_HOST}/ws`;
+import { WS_SERVER } from '@/lib/streamingServer';
 
 interface DeckBroadcast {
   ws: WebSocket | null;

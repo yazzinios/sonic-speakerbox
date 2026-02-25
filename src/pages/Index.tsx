@@ -39,12 +39,17 @@ const Index = () => {
     }
   };
 
-  const copyChannelCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    toast.success(`Channel code copied: ${code}`);
+  const copyListenLink = (code: string) => {
+    const url = `${window.location.origin}/listen?code=${code}`;
+    navigator.clipboard.writeText(url);
+    toast.success(`Listen link copied for ${code}!`);
   };
 
   const copyRequestLink = () => {
+    if (!requestPeerId) {
+      toast.error('Request system still initializing, try again in a second');
+      return;
+    }
     const url = `${window.location.origin}/request?host=${requestPeerId}`;
     navigator.clipboard.writeText(url);
     toast.success('Request link copied!');
@@ -126,10 +131,10 @@ const Index = () => {
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">Channel codes for listeners:</p>
                   {channels.map(ch => (
-                    <div key={ch.id} className="flex items-center gap-2">
-                      <span className={`text-xs font-bold ${DECK_COLORS[ch.id].class}`}>{ch.id}</span>
+                    <div key={ch.deck_id} className="flex items-center gap-2">
+                      <span className={`text-xs font-bold ${DECK_COLORS[ch.deck_id].class}`}>{ch.deck_id}</span>
                       <code className="flex-1 bg-background rounded px-2 py-1 text-[10px] font-mono text-foreground truncate">{ch.code}</code>
-                      <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => copyChannelCode(ch.code)}>
+                      <Button size="sm" variant="outline" className="h-6 w-6 p-0" title="Copy listen link" onClick={() => copyListenLink(ch.code)}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     </div>

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { usePeerListener } from '@/hooks/usePeerStreaming';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -8,7 +9,8 @@ import { Headphones, Wifi, WifiOff, Volume2 } from 'lucide-react';
 
 const ListenerPage = () => {
   const { isConnected, connect, disconnect, setListenerVolume } = usePeerListener();
-  const [channelCode, setChannelCode] = useState('');
+  const [searchParams] = useSearchParams();
+  const [channelCode, setChannelCode] = useState(searchParams.get('code') || '');
   const [volume, setVolume] = useState(80);
   const [channelName, setChannelName] = useState('');
   const [bgImage, setBgImage] = useState('');

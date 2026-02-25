@@ -18,7 +18,7 @@ const Index = () => {
   const engine = useAudioEngine();
   const navigate = useNavigate();
   const { signOut } = useAuth();
-  const { settings, channels, loading: settingsLoading } = useCloudSettings();
+  const { settings, channels, loading: settingsLoading, savePeerId, clearPeerIds } = useCloudSettings();
   const { peerId, listenerCount, isHosting, startHosting, stopHosting } = usePeerHost();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
@@ -32,17 +32,44 @@ const Index = () => {
   const handleStartBroadcast = () => {
     const stream = engine.getOutputStream();
     if (stream) {
-      startHosting(stream);
+      // Save the peer ID to Supabase for each channel so listeners can look it up
+      startHosting(stream, (id) => {
+        channels.forEach(ch => savePeerId(ch.deck_id, id));
+      });
       if (!isListening) startListening();
     } else {
       toast.error('Initialize audio first by loading a track');
     }
   };
 
+  const copyToClipboard = (text: string, successMsg: string) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => toast.success(successMsg)).catch(() => fallbackCopy(text, successMsg));
+    } else {
+      fallbackCopy(text, successMsg);
+    }
+  };
+
+  const fallbackCopy = (text: string, successMsg: string) => {
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.style.position = 'fixed';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    try {
+      document.execCommand('copy');
+      toast.success(successMsg);
+    } catch {
+      toast.error('Could not copy — please copy manually: ' + text);
+    }
+    document.body.removeChild(el);
+  };
+
   const copyListenLink = (code: string) => {
     const url = `${window.location.origin}/listen?code=${code}`;
-    navigator.clipboard.writeText(url);
-    toast.success(`Listen link copied for ${code}!`);
+    copyToClipboard(url, `Listen link copied for ${code}!`);
   };
 
   const copyRequestLink = () => {
@@ -51,8 +78,7 @@ const Index = () => {
       return;
     }
     const url = `${window.location.origin}/request?host=${requestPeerId}`;
-    navigator.clipboard.writeText(url);
-    toast.success('Request link copied!');
+    copyToClipboard(url, 'Request link copied!');
   };
 
   const handleStartMic = () => {
@@ -144,7 +170,7 @@ const Index = () => {
                       <Music className="h-3 w-3 mr-1" /> Copy Request Link
                     </Button>
                   )}
-                  <Button variant="outline" onClick={() => { stopHosting(); stopListening(); }} className="w-full">
+                  <Button variant="outline" onClick={() => { stopHosting(); stopListening(); clearPeerIds(); }} className="w-full">
                     <WifiOff className="h-4 w-4 mr-1" /> Stop Broadcasting
                   </Button>
                 </div>

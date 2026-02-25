@@ -9,7 +9,7 @@ export function usePeerHost() {
   const [listenerCount, setListenerCount] = useState(0);
   const [isHosting, setIsHosting] = useState(false);
 
-  const startHosting = useCallback((stream: MediaStream) => {
+  const startHosting = useCallback((stream: MediaStream, onPeerId?: (id: string) => void) => {
     if (peerRef.current) return;
     streamRef.current = stream;
 
@@ -19,6 +19,7 @@ export function usePeerHost() {
     peer.on('open', (id) => {
       setPeerId(id);
       setIsHosting(true);
+      if (onPeerId) onPeerId(id);
     });
 
     peer.on('call', (call) => {
@@ -58,6 +59,40 @@ export function usePeerListener() {
   const peerRef = useRef<Peer | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [needsUserGesture, setNeedsUserGesture] = useState(false);
+  const pendingStreamRef = useRef<MediaStream | null>(null);
+
+  const playStream = useCallback((stream: MediaStream) => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.autoplay = true;
+    }
+    audioRef.current.srcObject = stream;
+    const playPromise = audioRef.current.play();
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          setIsConnected(true);
+          setNeedsUserGesture(false);
+        })
+        .catch(() => {
+          // Autoplay blocked — wait for user to tap play
+          pendingStreamRef.current = stream;
+          setNeedsUserGesture(true);
+          setIsConnected(true); // still show connected UI
+        });
+    }
+  }, []);
+
+  const resumePlayback = useCallback(() => {
+    if (pendingStreamRef.current && audioRef.current) {
+      audioRef.current.srcObject = pendingStreamRef.current;
+      audioRef.current.play().then(() => {
+        setNeedsUserGesture(false);
+        pendingStreamRef.current = null;
+      }).catch(console.error);
+    }
+  }, []);
 
   const connect = useCallback((hostId: string) => {
     if (peerRef.current) return;
@@ -79,13 +114,9 @@ export function usePeerListener() {
       const call = peer.call(hostId, dest.stream);
 
       call.on('stream', (stream) => {
-        if (!audioRef.current) audioRef.current = new Audio();
-        audioRef.current.srcObject = stream;
-        audioRef.current.play();
-        setIsConnected(true);
-        // Clean up silent stream
         osc.stop();
         ctx.close();
+        playStream(stream);
       });
 
       call.on('close', () => setIsConnected(false));
@@ -96,7 +127,7 @@ export function usePeerListener() {
       console.error('Peer listener error:', err);
       setIsConnected(false);
     });
-  }, []);
+  }, [playStream]);
 
   const disconnect = useCallback(() => {
     if (audioRef.current) {
@@ -105,12 +136,14 @@ export function usePeerListener() {
     }
     peerRef.current?.destroy();
     peerRef.current = null;
+    pendingStreamRef.current = null;
     setIsConnected(false);
+    setNeedsUserGesture(false);
   }, []);
 
   const setListenerVolume = useCallback((vol: number) => {
     if (audioRef.current) audioRef.current.volume = vol;
   }, []);
 
-  return { isConnected, connect, disconnect, setListenerVolume };
+  return { isConnected, needsUserGesture, resumePlayback, connect, disconnect, setListenerVolume };
 }

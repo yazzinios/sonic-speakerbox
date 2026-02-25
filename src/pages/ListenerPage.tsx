@@ -6,9 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Headphones, Wifi, WifiOff, Volume2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const ListenerPage = () => {
-  const { isConnected, connect, disconnect, setListenerVolume } = usePeerListener();
+  const { isConnected, needsUserGesture, resumePlayback, connect, disconnect, setListenerVolume } = usePeerListener();
   const [searchParams] = useSearchParams();
   const [channelCode, setChannelCode] = useState(searchParams.get('code') || '');
   const [volume, setVolume] = useState(80);
@@ -22,16 +23,23 @@ const ListenerPage = () => {
     // Look up channel from cloud database
     const { data } = await supabase
       .from('channels')
-      .select('name, bg_image')
+      .select('name, bg_image, peer_id')
       .eq('code', code)
       .maybeSingle();
 
-    if (data) {
-      setChannelName(data.name);
-      setBgImage(data.bg_image || '');
+    if (!data) {
+      toast.error('Channel not found. Check the code and try again.');
+      return;
     }
 
-    connect(code);
+    if (!data.peer_id) {
+      toast.error('DJ is not currently broadcasting on this channel.');
+      return;
+    }
+
+    setChannelName(data.name);
+    setBgImage(data.bg_image || '');
+    connect(data.peer_id);
   };
 
   const handleVolumeChange = ([v]: number[]) => {
@@ -70,16 +78,22 @@ const ListenerPage = () => {
             <>
               <div className="flex items-center justify-center">
                 <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/20 text-primary text-sm font-bold animate-pulse">
-                  <Wifi className="h-3 w-3" /> NOW BROADCASTING
+                  <Wifi className="h-3 w-3" /> NOW CONNECTED
                 </span>
               </div>
               {channelName && (
                 <p className="text-center text-sm text-muted-foreground">Connected to <span className="text-foreground font-bold">{channelName}</span></p>
               )}
-              <div className="flex items-center gap-2">
-                <Volume2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                <Slider value={[volume]} max={100} step={1} onValueChange={handleVolumeChange} className="flex-1" />
-              </div>
+              {needsUserGesture ? (
+                <Button onClick={resumePlayback} className="w-full animate-pulse">
+                  🔊 Tap to Start Listening
+                </Button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Volume2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <Slider value={[volume]} max={100} step={1} onValueChange={handleVolumeChange} className="flex-1" />
+                </div>
+              )}
               <Button variant="outline" onClick={disconnect} className="w-full">
                 <WifiOff className="h-4 w-4 mr-1" /> Disconnect
               </Button>

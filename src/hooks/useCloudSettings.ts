@@ -17,6 +17,7 @@ export interface CloudChannel {
   name: string;
   code: string;
   bg_image: string;
+  peer_id?: string;
 }
 
 export function useCloudSettings() {
@@ -107,5 +108,17 @@ export function useCloudSettings() {
     }
   }, [user]);
 
-  return { settings, channels, loading, saveSettings, saveChannels };
+  const savePeerId = useCallback(async (deckId: DeckId, peerId: string) => {
+    if (!user) return;
+    setChannels(prev => prev.map(ch => ch.deck_id === deckId ? { ...ch, peer_id: peerId } : ch));
+    await supabase.from('channels').update({ peer_id: peerId }).eq('user_id', user.id).eq('deck_id', deckId);
+  }, [user]);
+
+  const clearPeerIds = useCallback(async () => {
+    if (!user) return;
+    setChannels(prev => prev.map(ch => ({ ...ch, peer_id: '' })));
+    await supabase.from('channels').update({ peer_id: '' }).eq('user_id', user.id);
+  }, [user]);
+
+  return { settings, channels, loading, saveSettings, saveChannels, savePeerId, clearPeerIds };
 }

@@ -1,30 +1,31 @@
 services:
+
   sonicbeat:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: https://github.com/yazzinios/sonic-speakerbox.git
+      no_cache: true
+      args:
+        VITE_SUPABASE_PROJECT_ID: "iaedzkkysscmzsqccftn"
+        VITE_SUPABASE_PUBLISHABLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlhZWR6a2t5c3NjbXpzcWNjZnRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMTkzNjEsImV4cCI6MjA4NzU5NTM2MX0.-sxVzHBLlSvofDvN73_0KkfT5Hc8waoeEKP7AdlYWps"
+        VITE_SUPABASE_URL: "https://iaedzkkysscmzsqccftn.supabase.co"
     container_name: sonicbeat
     ports:
-      - "8080:80"
-    volumes:
-      - sonicbeat-data:/usr/share/nginx/html
+      - "8083:80"
+    restart: always
     depends_on:
-      - streaming
-    restart: unless-stopped
+      - hls-server
 
-  streaming:
+  hls-server:
     build:
-      context: ./streaming-server
-      dockerfile: Dockerfile
-    container_name: sonicbeat-streaming
+      context: https://github.com/yazzinios/sonic-speakerbox.git#main:streaming-server
+      no_cache: true
+    container_name: hls-server
     ports:
       - "3001:3001"
     volumes:
       - sonicbeat-hls:/tmp/hls
-    restart: unless-stopped
+    restart: always
 
 volumes:
-  sonicbeat-data:
-    name: sonicbeat-data
   sonicbeat-hls:
     name: sonicbeat-hls

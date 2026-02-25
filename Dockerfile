@@ -1,3 +1,8 @@
+# ============================================================
+# SonicBeat - Main App Dockerfile
+# Builds the React app and serves it with nginx
+# ============================================================
+
 # ---- Build Stage ----
 FROM node:20-alpine AS build
 
@@ -8,9 +13,8 @@ RUN npm install
 
 COPY . .
 
-# ENV variables for build
 ARG VITE_SUPABASE_PROJECT_ID=iaedzkkysscmzsqccftn
-ARG VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_8Kz-I1-eCI0y1boM0mhqVw_NXJf4dqa
+ARG VITE_SUPABASE_PUBLISHABLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlhZWR6a2t5c3NjbXpzcWNjZnRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMTkzNjEsImV4cCI6MjA4NzU5NTM2MX0.-sxVzHBLlSvofDvN73_0KkfT5Hc8waoeEKP7AdlYWps
 ARG VITE_SUPABASE_URL=https://iaedzkkysscmzsqccftn.supabase.co
 
 ENV VITE_SUPABASE_PROJECT_ID=$VITE_SUPABASE_PROJECT_ID

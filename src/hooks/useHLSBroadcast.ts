@@ -2,8 +2,9 @@ import { useRef, useState, useCallback } from 'react';
 import type { DeckId } from '@/types/channels';
 import { ALL_DECKS } from '@/types/channels';
 
-// WebSocket goes directly to port 3001, HTTP goes through nginx proxy
-const WS_SERVER = `ws://${window.location.hostname}:3001`;
+// All traffic goes through nginx on the same origin
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_SERVER = `${WS_PROTOCOL}://${window.location.host}/ws`;
 
 interface DeckBroadcast {
   ws: WebSocket;

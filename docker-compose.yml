@@ -1,0 +1,13 @@
+services:
+  sonicbeat:
+    build: .
+    container_name: sonicbeat
+    ports:
+      - "8080:80"
+    volumes:
+      - sonicbeat-data:/usr/share/nginx/html
+    restart: unless-stopped
+
+volumes:
+  sonicbeat-data:
+    name: sonicbeat-data

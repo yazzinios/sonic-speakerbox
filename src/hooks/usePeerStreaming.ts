@@ -9,11 +9,13 @@ export function usePeerHost() {
   const [listenerCount, setListenerCount] = useState(0);
   const [isHosting, setIsHosting] = useState(false);
 
-  const startHosting = useCallback((stream: MediaStream, onPeerId?: (id: string) => void) => {
+  const startHosting = useCallback((stream: MediaStream, channelCode?: string, onPeerId?: (id: string) => void) => {
     if (peerRef.current) return;
     streamRef.current = stream;
 
-    const peer = new Peer();
+    // Use channel code as peer ID so listeners can connect with just the code
+    const peerId = channelCode ? channelCode.toLowerCase().replace(/[^a-z0-9]/g, '-') : undefined;
+    const peer = peerId ? new Peer(peerId) : new Peer();
     peerRef.current = peer;
 
     peer.on('open', (id) => {

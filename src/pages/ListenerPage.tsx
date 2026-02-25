@@ -20,10 +20,10 @@ const ListenerPage = () => {
     const code = channelCode.trim();
     if (!code) return;
 
-    // Look up channel from cloud database
+    // Look up channel name and bg from Supabase
     const { data } = await supabase
       .from('channels')
-      .select('name, bg_image, peer_id')
+      .select('name, bg_image')
       .eq('code', code)
       .maybeSingle();
 
@@ -32,14 +32,12 @@ const ListenerPage = () => {
       return;
     }
 
-    if (!data.peer_id) {
-      toast.error('DJ is not currently broadcasting on this channel.');
-      return;
-    }
-
     setChannelName(data.name);
     setBgImage(data.bg_image || '');
-    connect(data.peer_id);
+
+    // Connect using the code directly as the peer ID (host registers with the code)
+    const peerId = code.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    connect(peerId);
   };
 
   const handleVolumeChange = ([v]: number[]) => {

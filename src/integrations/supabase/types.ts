@@ -12,6 +12,7 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  // Project: iaedzkkysscmzsqccftn (SonicBeat)
   public: {
     Tables: {
       announcements: {

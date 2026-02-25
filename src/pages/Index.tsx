@@ -18,7 +18,7 @@ const Index = () => {
   const engine = useAudioEngine();
   const navigate = useNavigate();
   const { signOut } = useAuth();
-  const { settings, channels, loading: settingsLoading, savePeerId, clearPeerIds } = useCloudSettings();
+  const { settings, channels, loading: settingsLoading } = useCloudSettings();
   const { peerId, listenerCount, isHosting, startHosting, stopHosting } = usePeerHost();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
@@ -32,10 +32,9 @@ const Index = () => {
   const handleStartBroadcast = () => {
     const stream = engine.getOutputStream();
     if (stream) {
-      // Save the peer ID to Supabase for each channel so listeners can look it up
-      startHosting(stream, (id) => {
-        channels.forEach(ch => savePeerId(ch.deck_id, id));
-      });
+      // Use first channel's code as the peer ID so listeners can connect with just the code
+      const primaryCode = channels[0]?.code;
+      startHosting(stream, primaryCode);
       if (!isListening) startListening();
     } else {
       toast.error('Initialize audio first by loading a track');
@@ -170,7 +169,7 @@ const Index = () => {
                       <Music className="h-3 w-3 mr-1" /> Copy Request Link
                     </Button>
                   )}
-                  <Button variant="outline" onClick={() => { stopHosting(); stopListening(); clearPeerIds(); }} className="w-full">
+                  <Button variant="outline" onClick={() => { stopHosting(); stopListening(); }} className="w-full">
                     <WifiOff className="h-4 w-4 mr-1" /> Stop Broadcasting
                   </Button>
                 </div>

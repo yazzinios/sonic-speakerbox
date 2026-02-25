@@ -2,11 +2,14 @@ import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ArrowLeft, Upload, Image, Music, Save, Trash2 } from 'lucide-react';
+import { Slider } from '@/components/ui/slider';
+import { ArrowLeft, Image, Music, Save, Trash2, Mic } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useCloudSettings, type CloudChannel } from '@/hooks/useCloudSettings';
-import { ALL_DECKS, DECK_COLORS } from '@/types/channels';
+import { DECK_COLORS } from '@/types/channels';
+
+const DEFAULT_DUCK = 0.05;
 
 const SettingsPage = () => {
   const navigate = useNavigate();
@@ -21,6 +24,12 @@ const SettingsPage = () => {
   const [bgPreview, setBgPreview] = useState('');
   const [jingleName, setJingleName] = useState('');
   const [localChannels, setLocalChannels] = useState<CloudChannel[]>([]);
+
+  // Mic duck level read from localStorage
+  const [localDuckPct, setLocalDuckPct] = useState<number>(() => {
+    const saved = localStorage.getItem('mic-duck-level');
+    return Math.round((saved !== null ? parseFloat(saved) : DEFAULT_DUCK) * 100);
+  });
 
   // Sync cloud state to local form state
   useEffect(() => {
@@ -45,10 +54,8 @@ const SettingsPage = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     setJingleName(file.name);
-    // For now store as data URL — could move to storage bucket later
     const reader = new FileReader();
     reader.onload = () => {
-      // Save jingle data to localStorage for audio engine (data URLs for audio)
       localStorage.setItem('dj-jingle', reader.result as string);
     };
     reader.readAsDataURL(file);
@@ -66,7 +73,12 @@ const SettingsPage = () => {
     reader.readAsDataURL(file);
   };
 
+  const persistDuck = (pct: number) => {
+    localStorage.setItem('mic-duck-level', String(pct / 100));
+  };
+
   const handleSave = async () => {
+    persistDuck(localDuckPct);
     await saveSettings({
       station_name: stationName,
       dj_name: djName,
@@ -74,7 +86,7 @@ const SettingsPage = () => {
       jingle_name: jingleName,
     });
     await saveChannels(localChannels);
-    toast.success('Settings saved to cloud!');
+    toast.success('Settings saved!');
   };
 
   const clearBg = () => setBgPreview('');
@@ -109,6 +121,50 @@ const SettingsPage = () => {
           <div className="space-y-2">
             <Label className="text-xs">DJ Name</Label>
             <Input value={djName} onChange={e => setDjName(e.target.value)} placeholder="DJ Name" />
+          </div>
+        </section>
+
+        {/* Mic Settings */}
+        <section className="rounded-lg border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Mic className="h-4 w-4 text-destructive" />
+            <h2 className="text-sm font-bold tracking-wider text-foreground">MIC SETTINGS</h2>
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Music Volume When Mic is On</Label>
+              <span className="text-sm font-mono font-bold text-foreground">{localDuckPct}%</span>
+            </div>
+            <Slider
+              value={[localDuckPct]}
+              min={0}
+              max={100}
+              step={1}
+              onValueChange={([v]) => setLocalDuckPct(v)}
+              onValueCommit={([v]) => persistDuck(v)}
+            />
+            <p className="text-[10px] text-muted-foreground">
+              When you go On Air, music drops to <strong>{localDuckPct}%</strong> of its current level.
+              Default is 5% (near silence).
+            </p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="text-xs"
+                onClick={() => { setLocalDuckPct(5); persistDuck(5); }}>
+                5% (Default)
+              </Button>
+              <Button size="sm" variant="outline" className="text-xs"
+                onClick={() => { setLocalDuckPct(0); persistDuck(0); }}>
+                Mute
+              </Button>
+              <Button size="sm" variant="outline" className="text-xs"
+                onClick={() => { setLocalDuckPct(30); persistDuck(30); }}>
+                30%
+              </Button>
+              <Button size="sm" variant="outline" className="text-xs"
+                onClick={() => { setLocalDuckPct(50); persistDuck(50); }}>
+                50%
+              </Button>
+            </div>
           </div>
         </section>
 

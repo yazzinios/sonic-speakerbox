@@ -36,6 +36,9 @@ const INITIAL_DECK: DeckState = {
   youtubeUrl: '',
 };
 
+// Default mic duck level: 5% of original volume
+const DEFAULT_MIC_DUCK_LEVEL = 0.05;
+
 export function useAudioEngine() {
   const ctxRef = useRef<AudioContext | null>(null);
   const masterRef = useRef<GainNode | null>(null);
@@ -64,6 +67,17 @@ export function useAudioEngine() {
   const [micActive, setMicActive] = useState(false);
   const [jinglePlaying, setJinglePlaying] = useState(false);
   const [micDuck, setMicDuck] = useState(1);
+  // User-configurable mic duck level (saved in localStorage)
+  const [micDuckLevel, setMicDuckLevelState] = useState<number>(() => {
+    const saved = localStorage.getItem('mic-duck-level');
+    return saved !== null ? parseFloat(saved) : DEFAULT_MIC_DUCK_LEVEL;
+  });
+
+  const setMicDuckLevel = useCallback((level: number) => {
+    const clamped = Math.max(0, Math.min(1, level));
+    setMicDuckLevelState(clamped);
+    localStorage.setItem('mic-duck-level', String(clamped));
+  }, []);
 
   const setDeck = useCallback((id: DeckId, updater: (prev: DeckState) => DeckState) => {
     setDecks(prev => ({ ...prev, [id]: updater(prev[id]) }));
@@ -105,7 +119,7 @@ export function useAudioEngine() {
       analyser.fftSize = 128;
       analysersRef.current[id] = analyser;
 
-      // Per-deck stream destination
+      // Per-deck stream destination (used for per-channel HLS broadcast)
       const deckDest = ctx.createMediaStreamDestination();
       deckStreamDestsRef.current[id] = deckDest;
 
@@ -118,16 +132,18 @@ export function useAudioEngine() {
       // Also route to per-deck destination
       analyser.connect(deckDest);
 
-      // Per-deck mic gain (for selective mic routing)
+      // Per-deck mic gain (for selective mic routing to specific channels)
       const micDeckGain = ctx.createGain();
       micDeckGain.gain.value = 0;
       micDeckGain.connect(deckDest);
       micDeckGainsRef.current[id] = micDeckGain;
     }
 
+    // Master mic gain — routes to local monitor (speakers) only, NOT to any stream
+    // This lets the DJ hear themselves locally without leaking to wrong streams
     const micGain = ctx.createGain();
     micGain.gain.value = 0;
-    micGain.connect(master);
+    micGain.connect(ctx.destination); // local monitor only
     micGainRef.current = micGain;
 
     return ctx;
@@ -279,30 +295,43 @@ export function useAudioEngine() {
     });
   }, [getCtx]);
 
+  /**
+   * Start mic broadcasting.
+   * @param targets - which deck channels to route mic to. Defaults to all.
+   *
+   * The mic is routed ONLY to the selected deck stream destinations.
+   * Music on non-targeted decks is NOT ducked — only targeted decks get ducked.
+   * Local monitor (DJ headphones) always hears the mic.
+   */
   const startMic = useCallback(async (targets: DeckId[] = ALL_DECKS as unknown as DeckId[]) => {
     const ctx = getCtx();
     if (ctx.state === 'suspended') await ctx.resume();
     await playJingle();
-    setMicDuck(0.2);
+
+    // Duck only the targeted deck volumes using the configured duck level
+    setMicDuck(micDuckLevel);
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micStreamRef.current = stream;
     const source = ctx.createMediaStreamSource(stream);
     micSourceRef.current = source;
+
+    // Route to local monitor so DJ hears themselves
     source.connect(micGainRef.current!);
     micGainRef.current!.gain.setValueAtTime(1, ctx.currentTime);
 
-    // Route mic to specific deck destinations
+    // Route mic ONLY to selected deck stream destinations
     for (const id of ALL_DECKS) {
       const g = micDeckGainsRef.current[id];
       if (g) {
         source.connect(g);
+        // Only open the gate for targeted decks
         g.gain.setValueAtTime(targets.includes(id) ? 1 : 0, ctx.currentTime);
       }
     }
 
     setMicActive(true);
-  }, [getCtx, playJingle]);
+  }, [getCtx, playJingle, micDuckLevel]);
 
   const stopMic = useCallback(() => {
     const ctx = ctxRef.current;
@@ -362,5 +391,7 @@ export function useAudioEngine() {
     setYoutubeUrl, youtubePlay, youtubeStop, setCustomJingle, playAnnouncement,
     startMic, stopMic, getAnalyser, getOutputStream, getDeckOutputStream,
     duckStart, duckEnd,
+    // Mic duck settings
+    micDuckLevel, setMicDuckLevel,
   };
 }

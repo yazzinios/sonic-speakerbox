@@ -16,7 +16,7 @@ RUN npm install
 
 COPY server.js .
 
-RUN mkdir -p /tmp/hls
+RUN mkdir -p /tmp/hls /tmp/uploads
 
 EXPOSE 3001
 

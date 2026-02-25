@@ -26,6 +26,21 @@ const Index = () => {
   // True when server has an active stream but DJ hasn't clicked broadcast yet
   const [serverHasStream, setServerHasStream] = useState(false);
 
+  // When DJ closes the browser, tell server to keep playing the uploaded tracks
+  useEffect(() => {
+    const handleUnload = () => {
+      // Use sendBeacon (fire-and-forget, survives page unload) to tell server
+      // to switch each deck to file playback so music continues without the browser.
+      ALL_DECKS.forEach(deck => {
+        const url = `${STREAMING_SERVER}/deck/${deck}/play`;
+        const blob = new Blob([JSON.stringify({ loop: true })], { type: 'application/json' });
+        navigator.sendBeacon(url, blob);
+      });
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
+  }, []);
+
   useEffect(() => {
     if (settings.jingle_url) {
       fetch(settings.jingle_url).then(r => r.arrayBuffer()).then(buffer => engine.setCustomJingle(buffer)).catch(() => {});

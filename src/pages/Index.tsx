@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
-import { usePeerHost } from '@/hooks/usePeerStreaming';
+import { useHLSBroadcast } from '@/hooks/useHLSBroadcast';
 import { useRequestHost } from '@/hooks/useMusicRequests';
 import { useAuth } from '@/hooks/useAuth';
 import { useCloudSettings } from '@/hooks/useCloudSettings';
@@ -19,7 +19,7 @@ const Index = () => {
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const { settings, channels, loading: settingsLoading } = useCloudSettings();
-  const { peerId, listenerCount, isHosting, startHosting, stopHosting } = usePeerHost();
+  const { isHosting, listenerCount, listenerCounts, startHosting, stopHosting } = useHLSBroadcast();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
 
@@ -30,15 +30,11 @@ const Index = () => {
   }, [settings.jingle_url]);
 
   const handleStartBroadcast = () => {
-    const stream = engine.getOutputStream();
-    if (stream) {
-      // Use first channel's code as the peer ID so listeners can connect with just the code
-      const primaryCode = channels[0]?.code;
-      startHosting(stream, primaryCode);
-      if (!isListening) startListening();
-    } else {
-      toast.error('Initialize audio first by loading a track');
-    }
+    // Ensure audio context is initialized
+    engine.getOutputStream();
+    // Start HLS broadcast — one stream per deck
+    startHosting(engine.getDeckOutputStream);
+    if (!isListening) startListening();
   };
 
   const copyToClipboard = (text: string, successMsg: string) => {
@@ -103,7 +99,7 @@ const Index = () => {
           {/* 4 Decks in 2x2 grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {ALL_DECKS.map(id => {
-              const ch = channels.find(c => c.id === id);
+              const ch = channels.find(c => c.deck_id === id);
               return (
                 <Deck key={id} id={id}
                   state={engine.decks[id]}
@@ -159,6 +155,9 @@ const Index = () => {
                     <div key={ch.deck_id} className="flex items-center gap-2">
                       <span className={`text-xs font-bold ${DECK_COLORS[ch.deck_id].class}`}>{ch.deck_id}</span>
                       <code className="flex-1 bg-background rounded px-2 py-1 text-[10px] font-mono text-foreground truncate">{ch.code}</code>
+                      <span className="text-xs text-muted-foreground flex items-center gap-0.5">
+                        <Users className="h-3 w-3" />{listenerCounts[ch.deck_id] ?? 0}
+                      </span>
                       <Button size="sm" variant="outline" className="h-6 w-6 p-0" title="Copy listen link" onClick={() => copyListenLink(ch.code)}>
                         <Copy className="h-3 w-3" />
                       </Button>

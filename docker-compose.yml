@@ -1,13 +1,30 @@
 services:
   sonicbeat:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: sonicbeat
     ports:
       - "8080:80"
     volumes:
       - sonicbeat-data:/usr/share/nginx/html
+    depends_on:
+      - streaming
+    restart: unless-stopped
+
+  streaming:
+    build:
+      context: ./streaming-server
+      dockerfile: Dockerfile
+    container_name: sonicbeat-streaming
+    ports:
+      - "3001:3001"
+    volumes:
+      - sonicbeat-hls:/tmp/hls
     restart: unless-stopped
 
 volumes:
   sonicbeat-data:
     name: sonicbeat-data
+  sonicbeat-hls:
+    name: sonicbeat-hls

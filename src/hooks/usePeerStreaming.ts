@@ -1,60 +1,80 @@
 import { useRef, useState, useCallback } from 'react';
 import Peer, { MediaConnection } from 'peerjs';
+import type { DeckId } from '@/types/channels';
+import { ALL_DECKS } from '@/types/channels';
+
+// One peer per deck channel
+interface DeckPeer {
+  peer: Peer;
+  connections: MediaConnection[];
+}
 
 export function usePeerHost() {
-  const peerRef = useRef<Peer | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const connectionsRef = useRef<MediaConnection[]>([]);
-  const [peerId, setPeerId] = useState('');
-  const [listenerCount, setListenerCount] = useState(0);
+  const deckPeersRef = useRef<Partial<Record<DeckId, DeckPeer>>>({});
+  const [listenerCounts, setListenerCounts] = useState<Record<DeckId, number>>({ A: 0, B: 0, C: 0, D: 0 });
   const [isHosting, setIsHosting] = useState(false);
+  const [peerIds, setPeerIds] = useState<Partial<Record<DeckId, string>>>({});
 
-  const startHosting = useCallback((stream: MediaStream, channelCode?: string, onPeerId?: (id: string) => void) => {
-    if (peerRef.current) return;
-    streamRef.current = stream;
+  // Total listeners across all decks
+  const listenerCount = Object.values(listenerCounts).reduce((a, b) => a + b, 0);
 
-    // Use channel code as peer ID so listeners can connect with just the code
-    const peerId = channelCode ? channelCode.toLowerCase().replace(/[^a-z0-9]/g, '-') : undefined;
-    const peer = peerId ? new Peer(peerId) : new Peer();
-    peerRef.current = peer;
+  const startHosting = useCallback((
+    getDeckStream: (deck: DeckId) => MediaStream | null,
+    channelCodes: Partial<Record<DeckId, string>>
+  ) => {
+    if (Object.keys(deckPeersRef.current).length > 0) return;
 
-    peer.on('open', (id) => {
-      setPeerId(id);
-      setIsHosting(true);
-      if (onPeerId) onPeerId(id);
-    });
+    ALL_DECKS.forEach((deckId) => {
+      const stream = getDeckStream(deckId);
+      if (!stream) return;
 
-    peer.on('call', (call) => {
-      call.answer(streamRef.current!);
-      connectionsRef.current.push(call);
-      setListenerCount(c => c + 1);
+      const code = channelCodes[deckId];
+      const peerId = code ? code.toLowerCase().replace(/[^a-z0-9]/g, '-') : undefined;
+      const peer = peerId ? new Peer(peerId) : new Peer();
+      const deckPeer: DeckPeer = { peer, connections: [] };
+      deckPeersRef.current[deckId] = deckPeer;
 
-      call.on('close', () => {
-        connectionsRef.current = connectionsRef.current.filter(c => c !== call);
-        setListenerCount(c => Math.max(0, c - 1));
+      peer.on('open', (id) => {
+        setPeerIds(prev => ({ ...prev, [deckId]: id }));
+        // Mark hosting once at least one peer is open
+        setIsHosting(true);
       });
 
-      call.on('error', () => {
-        connectionsRef.current = connectionsRef.current.filter(c => c !== call);
-        setListenerCount(c => Math.max(0, c - 1));
-      });
-    });
+      peer.on('call', (call) => {
+        // Answer with this deck's specific stream
+        call.answer(stream);
+        deckPeer.connections.push(call);
+        setListenerCounts(prev => ({ ...prev, [deckId]: prev[deckId] + 1 }));
 
-    peer.on('error', (err) => console.error('Peer host error:', err));
+        call.on('close', () => {
+          deckPeer.connections = deckPeer.connections.filter(c => c !== call);
+          setListenerCounts(prev => ({ ...prev, [deckId]: Math.max(0, prev[deckId] - 1) }));
+        });
+        call.on('error', () => {
+          deckPeer.connections = deckPeer.connections.filter(c => c !== call);
+          setListenerCounts(prev => ({ ...prev, [deckId]: Math.max(0, prev[deckId] - 1) }));
+        });
+      });
+
+      peer.on('error', (err) => console.error(`Peer host error [Deck ${deckId}]:`, err));
+    });
   }, []);
 
   const stopHosting = useCallback(() => {
-    connectionsRef.current.forEach(c => c.close());
-    connectionsRef.current = [];
-    peerRef.current?.destroy();
-    peerRef.current = null;
-    streamRef.current = null;
-    setPeerId('');
+    ALL_DECKS.forEach((deckId) => {
+      const dp = deckPeersRef.current[deckId];
+      if (dp) {
+        dp.connections.forEach(c => c.close());
+        dp.peer.destroy();
+      }
+    });
+    deckPeersRef.current = {};
+    setPeerIds({});
+    setListenerCounts({ A: 0, B: 0, C: 0, D: 0 });
     setIsHosting(false);
-    setListenerCount(0);
   }, []);
 
-  return { peerId, listenerCount, isHosting, startHosting, stopHosting };
+  return { peerIds, listenerCount, listenerCounts, isHosting, startHosting, stopHosting };
 }
 
 export function usePeerListener() {
@@ -78,10 +98,9 @@ export function usePeerListener() {
           setNeedsUserGesture(false);
         })
         .catch(() => {
-          // Autoplay blocked — wait for user to tap play
           pendingStreamRef.current = stream;
           setNeedsUserGesture(true);
-          setIsConnected(true); // still show connected UI
+          setIsConnected(true);
         });
     }
   }, []);
@@ -103,7 +122,7 @@ export function usePeerListener() {
     peerRef.current = peer;
 
     peer.on('open', () => {
-      // Create silent stream to initiate call
+      // Silent stream to initiate call
       const ctx = new AudioContext();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();

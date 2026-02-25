@@ -12,6 +12,8 @@ services:
     ports:
       - "8083:80"
     restart: always
+    networks:
+      - sonicbeat-net
     depends_on:
       - hls-server
 
@@ -25,6 +27,13 @@ services:
     volumes:
       - sonicbeat-hls:/tmp/hls
     restart: always
+    networks:
+      - sonicbeat-net
+
+networks:
+  sonicbeat-net:
+    name: sonicbeat-net
+    driver: bridge
 
 volumes:
   sonicbeat-hls:

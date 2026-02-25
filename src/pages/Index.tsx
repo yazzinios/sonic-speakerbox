@@ -22,6 +22,8 @@ const Index = () => {
   const { isHosting, listenerCount, listenerCounts, startHosting, stopHosting } = useHLSBroadcast();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
+  // True when server has an active stream but DJ hasn't clicked broadcast yet
+  const [serverHasStream, setServerHasStream] = useState(false);
 
   useEffect(() => {
     if (settings.jingle_url) {
@@ -29,11 +31,44 @@ const Index = () => {
     }
   }, [settings.jingle_url]);
 
-  const handleStartBroadcast = () => {
-    // Ensure audio context is initialized
-    engine.getOutputStream();
+  // Check if server has an active stream from a previous session
+  useEffect(() => {
+    const checkServerStream = async () => {
+      try {
+        const res = await fetch('/deck-info', { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) return;
+        const info = await res.json();
+        const anyStreaming = Object.values(info).some((d: any) => d.streaming);
+        if (anyStreaming && !isHosting) {
+          console.log('[DJ] Server still has active streams from previous session');
+          setServerHasStream(true);
+        }
+      } catch {
+        // streaming server not reachable — ignore
+      }
+    };
+    checkServerStream();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleStartBroadcast = async () => {
+    // Ensure audio context is initialized and resumed (requires user gesture)
+    const stream = engine.getOutputStream();
+    if (!stream) {
+      toast.error('Could not initialize audio. Try clicking a Play button first.');
+      return;
+    }
+    // Verify streaming server is reachable before connecting WebSockets
+    try {
+      const res = await fetch('/health', { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) throw new Error('unhealthy');
+    } catch {
+      toast.error('Streaming server is not reachable. Make sure it is running on port 3001.');
+      return;
+    }
     // Start HLS broadcast — one stream per deck
     startHosting(engine.getDeckOutputStream);
+    setServerHasStream(false);
     if (!isListening) startListening();
   };
 
@@ -77,7 +112,8 @@ const Index = () => {
   };
 
   const handleStartMic = () => {
-    const targets = micTarget === 'all' ? [...ALL_DECKS] : [micTarget as DeckId];
+    // micTarget is either 'all' or DeckId[] — pass the array directly
+    const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
     engine.startMic(targets);
   };
 
@@ -145,9 +181,16 @@ const Index = () => {
               </div>
 
               {!isHosting ? (
-                <Button onClick={handleStartBroadcast} className="w-full">
-                  <Wifi className="h-4 w-4 mr-1" /> Start Broadcasting
-                </Button>
+                <div className="space-y-2">
+                  {serverHasStream && (
+                    <p className="text-xs text-amber-500 font-medium">
+                      ⚡ Server has an active stream from your last session.
+                    </p>
+                  )}
+                  <Button onClick={handleStartBroadcast} className="w-full">
+                    <Wifi className="h-4 w-4 mr-1" /> {serverHasStream ? 'Resume Broadcasting' : 'Start Broadcasting'}
+                  </Button>
+                </div>
               ) : (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">Channel codes for listeners:</p>

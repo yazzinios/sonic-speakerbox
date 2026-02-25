@@ -48,11 +48,12 @@ const ListenerPage = () => {
       return;
     }
 
-    // Check if deck is live
+    // Check if deck is live (streaming=true means ffmpeg is running, including grace period after DJ disconnect)
     try {
-      const res = await fetch(`${STREAMING_SERVER}/status`);
-      const { live } = await res.json();
-      if (!live[data.deck_id]) {
+      const res = await fetch(`${STREAMING_SERVER}/deck-info`);
+      const info = await res.json();
+      const deckInfo = info[data.deck_id];
+      if (!deckInfo || !deckInfo.streaming) {
         toast.error('DJ is not currently broadcasting on this channel.');
         setIsLoading(false);
         return;
@@ -93,9 +94,15 @@ const ListenerPage = () => {
       });
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          toast.error('Stream error. The DJ may have stopped broadcasting.');
-          setIsConnected(false);
-          setIsLoading(false);
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            // Network error (DJ reloaded / grace period) — try to recover
+            console.warn('[HLS] Fatal network error, attempting recovery...');
+            hls.startLoad();
+          } else {
+            toast.error('Stream error. The DJ may have stopped broadcasting.');
+            setIsConnected(false);
+            setIsLoading(false);
+          }
         }
       });
     } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {

@@ -190,18 +190,7 @@ export function useAudioEngine() {
     audio.src = URL.createObjectURL(file);
     audio.load();
     setDeck(deck, prev => ({ ...prev, fileName: file.name, currentTime: 0, duration: 0, isPlaying: false, loopStart: null, loopEnd: null, loopActive: false }));
-
-    // Upload track to server in background so it can play independently of the browser.
-    // autoplay=false — DJ still controls play/pause from the browser.
-    // When browser exits, call /deck/:deck/play to resume server-side playback.
-    const form = new FormData();
-    form.append('track', file);
-    fetch(`${STREAMING_SERVER}/upload/${deck}?autoplay=false`, {
-      method: 'POST',
-      body: form,
-    }).then(r => r.json()).then(data => {
-      if (data.ok) console.log(`[${deck}] Track uploaded to server: ${file.name}`);
-    }).catch(err => console.warn(`[${deck}] Track upload failed (server offline?):`, err));
+    // Note: actual server upload is handled by useLibrary.addTracks — no duplicate upload here.
   }, [getCtx, setDeck]);
 
   const play = useCallback((deck: DeckId) => {

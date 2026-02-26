@@ -19,6 +19,7 @@ const wss = new WebSocket.Server({
 
 const HLS_DIR = '/tmp/hls';
 const UPLOAD_DIR = '/data/uploads';
+const ANN_DIR = '/data/announcements';
 // Persistent state file — survives Docker restarts (stored on the uploads volume)
 const STATE_FILE = '/data/deck-state.json';
 const DECKS = ['A', 'B', 'C', 'D'];
@@ -28,6 +29,7 @@ DECKS.forEach(deck => {
   fs.mkdirSync(path.join(HLS_DIR, deck.toLowerCase()), { recursive: true });
 });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(ANN_DIR, { recursive: true });
 
 // ─── Persistent state save / restore ──────────────────────────────────────────
 function loadPersistedState() {
@@ -65,7 +67,7 @@ function savePersistedState() {
 
 const persistedState = loadPersistedState();
 
-// Multer — store uploaded tracks on persistent disk
+// Multer — library uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
@@ -74,6 +76,16 @@ const storage = multer.diskStorage({
   },
 });
 const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
+
+// Multer — announcement audio uploads
+const annStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, ANN_DIR),
+  filename: (req, file, cb) => {
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._\- ]/g, '_');
+    cb(null, `ann_${Date.now()}_${safeName}`);
+  },
+});
+const uploadAnn = multer({ storage: annStorage, limits: { fileSize: 50 * 1024 * 1024 } });
 
 // ─── Per-deck state ────────────────────────────────────────────────────────────
 const state = {};
@@ -587,6 +599,27 @@ app.post('/deck/:deck/playlist/jump', (req, res) => {
   s.mode = 'playlist';
   playPlaylistTrack(deck);
   res.json({ ok: true, newIndex: s.playlistIndex });
+});
+
+// ─── Announcement audio endpoints ────────────────────────────────────────────
+app.post('/announcements/upload', uploadAnn.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  console.log(`[Announcements] Uploaded: ${req.file.originalname} → ${req.file.filename}`);
+  res.json({ ok: true, serverName: req.file.filename, originalName: req.file.originalname });
+});
+
+// Serve announcement audio files
+app.use('/announcements/audio', express.static(ANN_DIR, {
+  setHeaders: (res) => res.set('Cache-Control', 'public, max-age=3600'),
+}));
+
+// Delete announcement audio
+app.delete('/announcements/files/:name', (req, res) => {
+  const name = req.params.name;
+  const filePath = path.join(ANN_DIR, name);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+  try { fs.unlinkSync(filePath); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── HLS static files ──────────────────────────────────────────────────────────

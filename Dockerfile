@@ -2,10 +2,8 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm install
-
 COPY . .
 
 ARG VITE_SUPABASE_PROJECT_ID=iaedzkkysscmzsqccftn
@@ -23,11 +21,6 @@ FROM nginx:alpine
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
-# Nginx config:
-#   /api/*  → streaming server (all REST endpoints)
-#   /ws     → streaming server WebSocket
-#   /hls/*  → streaming server HLS segments
-#   /*      → React SPA
 RUN printf 'server {\n\
     listen 80;\n\
     server_name _;\n\
@@ -35,9 +28,9 @@ RUN printf 'server {\n\
     index index.html;\n\
     resolver 127.0.0.11 valid=30s ipv6=off;\n\
 \n\
-    # All streaming server API calls\n\
+    # Node.js REST API\n\
     location /api/ {\n\
-        set $backend http://hls-server:3001;\n\
+        set $backend http://radio-server:3001;\n\
         proxy_pass $backend/;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header Host $host;\n\
@@ -51,19 +44,31 @@ RUN printf 'server {\n\
         if ($request_method = OPTIONS) { return 204; }\n\
     }\n\
 \n\
-    # HLS segments (no /api prefix, served direct)\n\
-    location /hls/ {\n\
-        set $backend http://hls-server:3001;\n\
-        proxy_pass $backend/hls/;\n\
+    # Icecast streams — /stream/deck-a etc.\n\
+    location /stream/ {\n\
+        set $icecast http://radio-server:8000;\n\
+        proxy_pass $icecast/;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header Host $host;\n\
+        proxy_set_header X-Real-IP $remote_addr;\n\
+        # Critical for audio streaming — disable buffering\n\
+        proxy_buffering off;\n\
+        proxy_cache off;\n\
         add_header Cache-Control no-cache;\n\
-        add_header Access-Control-Allow-Origin *;\n\
+        add_header Access-Control-Allow-Origin * always;\n\
     }\n\
 \n\
-    # WebSocket for live broadcast\n\
+    # Icecast admin panel (optional)\n\
+    location /icecast/ {\n\
+        set $icecast http://radio-server:8000;\n\
+        proxy_pass $icecast/;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Host $host;\n\
+    }\n\
+\n\
+    # WebSocket for live DJ broadcast\n\
     location /ws {\n\
-        set $backend http://hls-server:3001;\n\
+        set $backend http://radio-server:3001;\n\
         proxy_pass $backend;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header Upgrade $http_upgrade;\n\

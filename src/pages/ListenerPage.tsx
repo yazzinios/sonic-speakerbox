@@ -4,11 +4,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
-import { Headphones, Wifi, WifiOff, Volume2, Loader2 } from 'lucide-react';
+import { Headphones, Wifi, WifiOff, Volume2, Loader2, Radio } from 'lucide-react';
 import { toast } from 'sonner';
-import Hls from 'hls.js';
-
-import { STREAMING_SERVER } from '@/lib/streamingServer';
+import { STREAMING_SERVER, STREAM_BASE, ICECAST_BASE } from '@/lib/streamingServer';
 
 const ListenerPage = () => {
   const [searchParams] = useSearchParams();
@@ -16,19 +14,19 @@ const ListenerPage = () => {
   const [volume, setVolume] = useState(80);
   const [channelName, setChannelName] = useState('');
   const [bgImage, setBgImage] = useState('');
+  const [deckId, setDeckId] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [needsUserGesture, setNeedsUserGesture] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const streamUrlRef = useRef<string>('');
 
-  // Auto-connect if code is in URL
   useEffect(() => {
-    if (searchParams.get('code')) {
-      handleConnect();
-    }
+    if (searchParams.get('code')) handleConnect();
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { audioRef.current?.pause(); };
   }, []);
 
   const handleConnect = async () => {
@@ -36,7 +34,7 @@ const ListenerPage = () => {
     if (!code) return;
     setIsLoading(true);
 
-    // Look up channel from Supabase
+    // Look up channel
     const { data } = await supabase
       .from('channels')
       .select('name, bg_image, deck_id')
@@ -49,98 +47,50 @@ const ListenerPage = () => {
       return;
     }
 
-    // Check if deck is live (streaming=true means ffmpeg is running, including grace period after DJ disconnect)
-    try {
-      const res = await fetch(`${STREAMING_SERVER}/deck-info`);
-      const info = await res.json();
-      const deckInfo = info[data.deck_id];
-      if (!deckInfo || !deckInfo.streaming) {
-        toast.error('DJ is not currently broadcasting on this channel.');
-        setIsLoading(false);
-        return;
-      }
-    } catch {
-      toast.error('Cannot reach streaming server.');
-      setIsLoading(false);
-      return;
-    }
-
     setChannelName(data.name);
     setBgImage(data.bg_image || '');
+    setDeckId(data.deck_id);
 
-    // Connect to HLS stream for this specific deck
-    const streamUrl = `${STREAMING_SERVER}/hls/${data.deck_id.toLowerCase()}/stream.m3u8`;
-    connectHLS(streamUrl);
+    // Icecast stream URL for this deck
+    // e.g. http://host/stream/deck-a
+    const streamUrl = `${STREAM_BASE}/deck-${data.deck_id.toLowerCase()}`;
+    connectStream(streamUrl);
   };
 
-  const connectHLS = (streamUrl: string) => {
-    streamUrlRef.current = streamUrl;
-
+  const connectStream = (streamUrl: string) => {
     if (!audioRef.current) {
       audioRef.current = new Audio();
     }
     const audio = audioRef.current;
     audio.volume = volume / 100;
+    audio.preload = 'none';
 
-    // Destroy old HLS instance if any
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-      hlsRef.current = null;
-    }
+    // For Icecast MP3 — just set src directly, no HLS needed
+    audio.src = streamUrl;
 
-    if (Hls.isSupported()) {
-      const hls = new Hls({
-        lowLatencyMode: true,
-        backBufferLength: 10,
-        // Retry aggressively on manifest/segment fetch errors (DJ refresh, grace period)
-        manifestLoadingMaxRetry: 20,
-        levelLoadingMaxRetry: 20,
-        fragLoadingMaxRetry: 20,
-        manifestLoadingRetryDelay: 2000,
-        levelLoadingRetryDelay: 2000,
-        fragLoadingRetryDelay: 2000,
-      });
-      hlsRef.current = hls;
-      hls.loadSource(streamUrl);
-      hls.attachMedia(audio);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        audio.play()
-          .then(() => { setIsConnected(true); setIsLoading(false); })
-          .catch(() => { setNeedsUserGesture(true); setIsConnected(true); setIsLoading(false); });
+    audio.play()
+      .then(() => {
+        setIsConnected(true);
+        setIsLoading(false);
+        setNeedsUserGesture(false);
+      })
+      .catch(() => {
+        // Autoplay blocked — need user gesture
+        setNeedsUserGesture(true);
+        setIsConnected(true);
+        setIsLoading(false);
       });
 
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (!data.fatal) return;
-
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          // DJ may have briefly refreshed — keep retrying silently
-          console.warn('[HLS] Network error, retrying...');
-          hls.startLoad();
-        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          console.warn('[HLS] Media error, recovering...');
-          hls.recoverMediaError();
-        } else {
-          // Fatal unrecoverable error — wait 5s and reconnect from scratch
-          console.error('[HLS] Fatal error, will reconnect in 5s...', data);
-          hls.destroy();
-          hlsRef.current = null;
-          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-          reconnectTimerRef.current = setTimeout(() => {
-            connectHLS(streamUrlRef.current);
-          }, 5000);
+    audio.onerror = () => {
+      console.error('[Listener] Stream error');
+      // Retry after 3s
+      setTimeout(() => {
+        if (audio.src) {
+          audio.load();
+          audio.play().catch(() => {});
         }
-      });
-    } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari native HLS
-      audio.src = streamUrl;
-      audio.play()
-        .then(() => { setIsConnected(true); setIsLoading(false); })
-        .catch(() => { setNeedsUserGesture(true); setIsConnected(true); setIsLoading(false); });
-    } else {
-      toast.error('Your browser does not support HLS streaming.');
-      setIsLoading(false);
-    }
+      }, 3000);
+    };
   };
 
   const resumePlayback = () => {
@@ -148,16 +98,13 @@ const ListenerPage = () => {
   };
 
   const disconnect = () => {
-    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
-    hlsRef.current?.destroy();
-    hlsRef.current = null;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = '';
     }
-    streamUrlRef.current = '';
     setIsConnected(false);
     setNeedsUserGesture(false);
+    setDeckId('');
   };
 
   const handleVolumeChange = ([v]: number[]) => {
@@ -165,9 +112,16 @@ const ListenerPage = () => {
     if (audioRef.current) audioRef.current.volume = v / 100;
   };
 
+  // Direct stream URL for external apps (VLC, phone radio app, etc.)
+  const externalStreamUrl = deckId
+    ? `http://${ICECAST_BASE}/deck-${deckId.toLowerCase()}`
+    : '';
+
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4"
-      style={bgImage ? { backgroundImage: `url(${bgImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
+    <div
+      className="min-h-screen bg-background flex items-center justify-center p-4"
+      style={bgImage ? { backgroundImage: `url(${bgImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
+    >
       {bgImage && <div className="fixed inset-0 bg-background/70 backdrop-blur-sm" />}
       <div className="relative z-10 w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
@@ -184,8 +138,8 @@ const ListenerPage = () => {
               <Input
                 placeholder="Enter channel code..."
                 value={channelCode}
-                onChange={(e) => setChannelCode(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
+                onChange={e => setChannelCode(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleConnect()}
                 className="font-mono text-center text-lg tracking-wider"
                 disabled={isLoading}
               />
@@ -199,14 +153,16 @@ const ListenerPage = () => {
             <>
               <div className="flex items-center justify-center">
                 <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/20 text-primary text-sm font-bold animate-pulse">
-                  <Wifi className="h-3 w-3" /> LIVE
+                  <Radio className="h-3 w-3" /> LIVE
                 </span>
               </div>
+
               {channelName && (
                 <p className="text-center text-sm text-muted-foreground">
                   Listening to <span className="text-foreground font-bold">{channelName}</span>
                 </p>
               )}
+
               {needsUserGesture ? (
                 <Button onClick={resumePlayback} className="w-full animate-pulse">
                   🔊 Tap to Start Listening
@@ -215,8 +171,18 @@ const ListenerPage = () => {
                 <div className="flex items-center gap-2">
                   <Volume2 className="h-4 w-4 text-muted-foreground shrink-0" />
                   <Slider value={[volume]} max={100} step={1} onValueChange={handleVolumeChange} className="flex-1" />
+                  <span className="text-xs text-muted-foreground w-8 text-right">{volume}%</span>
                 </div>
               )}
+
+              {/* External stream URL for VLC / phone apps */}
+              {externalStreamUrl && (
+                <div className="rounded border bg-background p-2 space-y-1">
+                  <p className="text-[10px] text-muted-foreground">Open in VLC / radio app:</p>
+                  <code className="text-[10px] text-foreground break-all">{externalStreamUrl}</code>
+                </div>
+              )}
+
               <Button variant="outline" onClick={disconnect} className="w-full">
                 <WifiOff className="h-4 w-4 mr-1" /> Disconnect
               </Button>

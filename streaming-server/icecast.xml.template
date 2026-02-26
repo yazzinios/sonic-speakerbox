@@ -1,0 +1,92 @@
+<?xml version="1.0"?>
+<!-- ============================================================
+     Icecast2 configuration for SonicBeat
+     4 mountpoints: /deck-a /deck-b /deck-c /deck-d
+     ============================================================ -->
+<icecast>
+  <location>World</location>
+  <admin>admin@sonicbeat.local</admin>
+
+  <limits>
+    <clients>100</clients>
+    <sources>10</sources>
+    <queue-size>524288</queue-size>
+    <client-timeout>30</client-timeout>
+    <header-timeout>15</header-timeout>
+    <source-timeout>10</source-timeout>
+    <burst-on-connect>1</burst-on-connect>
+    <burst-size>65535</burst-size>
+  </limits>
+
+  <authentication>
+    <!-- Source password used by Liquidsoap to push audio -->
+    <source-password>${ICECAST_SOURCE_PASSWORD}</source-password>
+    <!-- Relay password (not used) -->
+    <relay-password>relay_unused</relay-password>
+    <!-- Admin password for /admin interface -->
+    <admin-user>admin</admin-user>
+    <admin-password>${ICECAST_ADMIN_PASSWORD}</admin-password>
+  </authentication>
+
+  <hostname>${ICECAST_HOST}</hostname>
+
+  <listen-socket>
+    <port>8000</port>
+    <bind-address>0.0.0.0</bind-address>
+  </listen-socket>
+
+  <!-- Allow all origins for browser listeners -->
+  <http-headers>
+    <header name="Access-Control-Allow-Origin" value="*" />
+    <header name="Access-Control-Allow-Headers" value="Origin, Accept, X-Requested-With, Content-Type" />
+    <header name="Access-Control-Allow-Methods" value="GET, OPTIONS, HEAD" />
+  </http-headers>
+
+  <mount type="normal">
+    <mount-name>/deck-a</mount-name>
+    <stream-name>SonicBeat Deck A</stream-name>
+    <stream-description>SonicBeat Radio Channel A</stream-description>
+    <public>1</public>
+  </mount>
+
+  <mount type="normal">
+    <mount-name>/deck-b</mount-name>
+    <stream-name>SonicBeat Deck B</stream-name>
+    <stream-description>SonicBeat Radio Channel B</stream-description>
+    <public>1</public>
+  </mount>
+
+  <mount type="normal">
+    <mount-name>/deck-c</mount-name>
+    <stream-name>SonicBeat Deck C</stream-name>
+    <stream-description>SonicBeat Radio Channel C</stream-description>
+    <public>1</public>
+  </mount>
+
+  <mount type="normal">
+    <mount-name>/deck-d</mount-name>
+    <stream-name>SonicBeat Deck D</stream-name>
+    <stream-description>SonicBeat Radio Channel D</stream-description>
+    <public>1</public>
+  </mount>
+
+  <fileserve>1</fileserve>
+
+  <paths>
+    <basedir>/usr/share/icecast2</basedir>
+    <logdir>/var/log/icecast2</logdir>
+    <webroot>/usr/share/icecast2/web</webroot>
+    <adminroot>/usr/share/icecast2/admin</adminroot>
+    <alias source="/" destination="/status.xsl"/>
+  </paths>
+
+  <logging>
+    <accesslog>-</accesslog>
+    <errorlog>-</errorlog>
+    <loglevel>3</loglevel>
+  </logging>
+
+  <security>
+    <chroot>0</chroot>
+  </security>
+</icecast>

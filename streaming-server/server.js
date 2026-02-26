@@ -1,9 +1,22 @@
+/**
+ * SonicBeat API Server
+ *
+ * Same REST API as before — the dashboard doesn't change.
+ * Backend is now Icecast + Liquidsoap instead of custom ffmpeg/HLS.
+ *
+ * Ports (internal only):
+ *   3001  — this Node API (proxied by nginx as /api/)
+ *   8000  — Icecast (proxied by nginx as /stream/ and /icecast/)
+ *   8005  — Liquidsoap harbor input (live DJ audio push)
+ *   1234  — Liquidsoap telnet control
+ */
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
 const multer = require('multer');
-const { spawn } = require('child_process');
+const net = require('net');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -12,33 +25,36 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server, verifyClient: ({ origin }, cb) => cb(true) });
+const wss = new WebSocket.Server({ server, verifyClient: (_, cb) => cb(true) });
 
-const HLS_DIR = '/tmp/hls';
-const UPLOAD_DIR = '/data/uploads';
+const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/uploads';
 const ANN_DIR = '/data/announcements';
 const STATE_FILE = '/data/deck-state.json';
 const DECKS = ['A', 'B', 'C', 'D'];
-const KEEP_ALIVE_MS = 10000; // 10s grace then fall back to AutoDJ
 
-DECKS.forEach(deck => fs.mkdirSync(path.join(HLS_DIR, deck.toLowerCase()), { recursive: true }));
+const ICECAST_HOST = process.env.ICECAST_HOST || 'icecast';
+const ICECAST_PORT = parseInt(process.env.ICECAST_PORT || '8000');
+const SOURCE_PASSWORD = process.env.ICECAST_SOURCE_PASSWORD || 'sonicbeat_source';
+const LIQ_HOST = process.env.LIQ_HOST || 'liquidsoap';
+const LIQ_TELNET_PORT = parseInt(process.env.LIQ_TELNET_PORT || '1234');
+const LIQ_HARBOR_PORT = parseInt(process.env.LIQ_HARBOR_PORT || '8005');
+
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(ANN_DIR, { recursive: true });
 
 // ─── Persistent state ─────────────────────────────────────────────────────────
-function loadPersistedState() {
+function loadState() {
   try {
     if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-  } catch (err) { console.warn('[State] Load error:', err.message); }
+  } catch (e) { console.warn('[State] Load error:', e.message); }
   return {};
 }
-
-function savePersistedState() {
+function saveState() {
   try {
-    const toSave = {};
-    DECKS.forEach(deck => {
-      const s = state[deck];
-      toSave[deck] = {
+    const out = {};
+    DECKS.forEach(d => {
+      const s = state[d];
+      out[d] = {
         mode: s.mode,
         trackPath: s.trackPath,
         trackName: s.trackName,
@@ -49,11 +65,32 @@ function savePersistedState() {
         autoDJEnabled: s.autoDJEnabled,
       };
     });
-    fs.writeFileSync(STATE_FILE, JSON.stringify(toSave, null, 2));
-  } catch (err) { console.warn('[State] Save error:', err.message); }
+    fs.writeFileSync(STATE_FILE, JSON.stringify(out, null, 2));
+  } catch (e) { console.warn('[State] Save error:', e.message); }
 }
 
-const persistedState = loadPersistedState();
+const persisted = loadState();
+const state = {};
+DECKS.forEach(d => {
+  const s = persisted[d] || {};
+  state[d] = {
+    mode: null,
+    trackPath: s.trackPath || null,
+    trackName: s.trackName || null,
+    looping: s.looping || false,
+    playlist: s.playlist || [],
+    playlistIndex: s.playlistIndex || 0,
+    playlistLoop: s.playlistLoop || false,
+    autoDJEnabled: s.autoDJEnabled !== undefined ? s.autoDJEnabled : true,
+    autoDJActive: false,
+    // Live broadcast state
+    socket: null,
+    liveProcess: null,   // ffmpeg process pushing to Liquidsoap harbor
+    liveActive: false,
+    // Persisted mode for resume on startup
+    persistedMode: s.mode || null,
+  };
+});
 
 // ─── Multer ───────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
@@ -74,271 +111,94 @@ const annStorage = multer.diskStorage({
 });
 const uploadAnn = multer({ storage: annStorage, limits: { fileSize: 50 * 1024 * 1024 } });
 
-// ─── Per-deck state ───────────────────────────────────────────────────────────
-const state = {};
-DECKS.forEach(deck => {
-  const saved = persistedState[deck] || {};
-  state[deck] = {
-    ffmpeg: null,
-    socket: null,
-    keepAliveTimer: null,
-    isLive: false,
-    mode: null,
-    trackPath: saved.trackPath || null,
-    trackName: saved.trackName || null,
-    looping: saved.looping || false,
-    pendingChunks: [],
-    ffmpegSpawned: false,
-    playlist: saved.playlist || [],
-    playlistIndex: saved.playlistIndex || 0,
-    playlistLoop: saved.playlistLoop || false,
-    persistedMode: saved.mode || null,
-    // AutoDJ: when enabled, picks random tracks from library when DJ is offline
-    autoDJEnabled: saved.autoDJEnabled !== undefined ? saved.autoDJEnabled : true,
-    autoDJActive: false,
-  };
-});
-
-// ─── AutoDJ: pick random files from library and loop them ────────────────────
-function getLibraryFiles() {
-  try {
-    return fs.readdirSync(UPLOAD_DIR)
-      .filter(f => /\.(mp3|wav|ogg|flac|aac|m4a)$/i.test(f))
-      .map(f => path.join(UPLOAD_DIR, f));
-  } catch { return []; }
-}
-
-function startAutoDJ(deck) {
-  const s = state[deck];
-  if (!s.autoDJEnabled) return;
-
-  const files = getLibraryFiles();
-  if (files.length === 0) {
-    console.log(`[${deck}] AutoDJ: no library files, will retry in 30s`);
-    s.keepAliveTimer = setTimeout(() => startAutoDJ(deck), 30000);
-    return;
-  }
-
-  // Shuffle library into a playlist
-  const shuffled = [...files].sort(() => Math.random() - 0.5);
-  s.playlist = shuffled.map(p => ({ path: p, name: path.basename(p), serverName: path.basename(p) }));
-  s.playlistIndex = 0;
-  s.playlistLoop = true;
-  s.mode = 'playlist';
-  s.autoDJActive = true;
-  console.log(`[${deck}] AutoDJ started — ${shuffled.length} tracks, looping`);
-  savePersistedState();
-  playPlaylistTrack(deck);
-}
-
-function stopAutoDJ(deck) {
-  const s = state[deck];
-  if (s.autoDJActive) {
-    console.log(`[${deck}] AutoDJ stopping (DJ taking over)`);
-    s.autoDJActive = false;
-  }
-}
-
-// ─── ffmpeg: FILE mode ────────────────────────────────────────────────────────
-function startFFmpegFile(deck, filePath, loop = false, onFinished = null) {
-  const s = state[deck];
-  stopFFmpeg(deck, true);
-
-  if (!fs.existsSync(filePath)) {
-    console.error(`[${deck}] File not found: ${filePath}`);
-    return;
-  }
-
-  const outDir = path.join(HLS_DIR, deck.toLowerCase());
-  const hlsPath = path.join(outDir, 'stream.m3u8');
-
-  try {
-    fs.readdirSync(outDir).forEach(f => {
-      if (f.endsWith('.ts') || f.endsWith('.m3u8')) {
-        try { fs.unlinkSync(path.join(outDir, f)); } catch (_) {}
-      }
+// ─── Liquidsoap telnet control ────────────────────────────────────────────────
+function liqCmd(command) {
+  return new Promise((resolve) => {
+    const client = new net.Socket();
+    let response = '';
+    client.setTimeout(3000);
+    client.connect(LIQ_TELNET_PORT, LIQ_HOST, () => {
+      client.write(command + '\n');
     });
-  } catch (_) {}
-
-  console.log(`[${deck}] ffmpeg file: ${path.basename(filePath)}${loop ? ' [loop]' : ''}`);
-
-  const args = [
-    ...(loop ? ['-stream_loop', '-1'] : []),
-    '-i', filePath,
-    '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-ar', '44100',
-    '-f', 'hls',
-    '-hls_time', '2',
-    '-hls_list_size', '10',
-    '-hls_flags', 'delete_segments+append_list+independent_segments',
-    '-hls_segment_type', 'mpegts',
-    '-hls_segment_filename', path.join(outDir, 'seg%05d.ts'),
-    '-y', hlsPath,
-  ];
-
-  const ffmpeg = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  ffmpeg.stderr.on('data', d => { if (d.toString().includes('.ts')) s.isLive = true; });
-  ffmpeg.on('close', code => {
-    console.log(`[${deck}] ffmpeg file exited (${code})`);
-    s.ffmpeg = null;
-    s.isLive = false;
-    if (s.mode !== 'playlist') { s.mode = null; savePersistedState(); }
-    if (onFinished) onFinished(deck, code);
+    client.on('data', d => { response += d.toString(); });
+    client.on('close', () => resolve(response.trim()));
+    client.on('error', (e) => {
+      console.warn('[Liquidsoap] Telnet error:', e.message);
+      resolve('');
+    });
+    client.on('timeout', () => { client.destroy(); resolve(''); });
   });
-
-  s.ffmpeg = ffmpeg;
-  if (s.mode !== 'playlist') s.mode = 'file';
-  s.isLive = false;
-  s.looping = loop;
-  s.trackPath = filePath;
-  s.trackName = path.basename(filePath);
-  savePersistedState();
 }
 
-// ─── ffmpeg: LIVE mode (WebSocket from browser) ───────────────────────────────
-function startFFmpegLive(deck) {
+// ─── Push a file to Icecast via ffmpeg (for file/playlist mode) ───────────────
+// Liquidsoap handles AutoDJ from the uploads dir automatically.
+// For explicit "load this file now" we use Liquidsoap's telnet to queue it.
+function liqSkipToCurrent(deck) {
+  // Tell Liquidsoap's autodj to reload and skip to new content
+  // We use the playlist.reload command
+  liqCmd(`autodj_${deck}.reload`);
+  liqCmd(`autodj_${deck}.skip`);
+}
+
+// ─── Start live DJ broadcast to Liquidsoap harbor ─────────────────────────────
+// Browser sends WebM/Opus via WebSocket → ffmpeg transcodes → HTTP PUT to harbor
+function startLiveBroadcast(deck, ws) {
   const s = state[deck];
-  if (s.ffmpeg) return;
+  stopLiveBroadcast(deck);
 
-  const outDir = path.join(HLS_DIR, deck.toLowerCase());
-  const hlsPath = path.join(outDir, 'stream.m3u8');
+  const mountUser = `source_${deck.toLowerCase()}`;
+  const harborUrl = `http://${LIQ_HOST}:${LIQ_HARBOR_PORT}/live/deck-${deck.toLowerCase()}`;
 
-  try {
-    fs.readdirSync(outDir).forEach(f => {
-      if (f.endsWith('.ts') || f.endsWith('.m3u8')) {
-        try { fs.unlinkSync(path.join(outDir, f)); } catch (_) {}
-      }
-    });
-  } catch (_) {}
+  console.log(`[${deck}] Starting live broadcast → ${harborUrl}`);
 
-  console.log(`[${deck}] ffmpeg live mode starting...`);
-
+  // ffmpeg: WebM stdin → MP3 → HTTP PUT to Liquidsoap harbor
   const ffmpeg = spawn('ffmpeg', [
     '-fflags', '+genpts+igndts',
-    '-analyzeduration', '0', '-probesize', '32',
-    '-f', 'webm', '-i', 'pipe:0',
-    '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-ar', '44100',
-    '-f', 'hls',
-    '-hls_time', '2', '-hls_list_size', '10',
-    '-hls_flags', 'delete_segments+append_list+independent_segments',
-    '-hls_segment_type', 'mpegts',
-    '-hls_segment_filename', path.join(outDir, 'seg%05d.ts'),
-    '-y', hlsPath,
+    '-analyzeduration', '0',
+    '-probesize', '32',
+    '-f', 'webm',
+    '-i', 'pipe:0',
+    '-c:a', 'libmp3lame',
+    '-b:a', '128k',
+    '-ac', '2',
+    '-ar', '44100',
+    '-f', 'mp3',
+    `icecast://source:${SOURCE_PASSWORD}@${LIQ_HOST}:${LIQ_HARBOR_PORT}/live/deck-${deck.toLowerCase()}`,
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
-  ffmpeg.stderr.on('data', d => { if (d.toString().includes('.ts')) s.isLive = true; });
-  ffmpeg.stdin.on('error', err => { if (err.code !== 'EPIPE') console.error(`[${deck}] stdin error:`, err.message); });
-  ffmpeg.on('close', code => {
-    console.log(`[${deck}] ffmpeg live exited (${code})`);
-    s.ffmpeg = null; s.isLive = false; s.ffmpegSpawned = false;
-    if (s.mode === 'live') { s.mode = null; savePersistedState(); }
-    if (s.socket && s.socket.readyState === WebSocket.OPEN) {
-      s.pendingChunks = [];
+  ffmpeg.stdout.on('data', () => {});
+  ffmpeg.stderr.on('data', d => {
+    const msg = d.toString();
+    if (msg.includes('error') && !msg.includes('deprecated')) {
+      console.error(`[${deck}] ffmpeg:`, msg.trim().split('\n')[0]);
     }
   });
+  ffmpeg.stdin.on('error', e => { if (e.code !== 'EPIPE') console.error(`[${deck}] stdin:`, e.message); });
+  ffmpeg.on('close', code => {
+    console.log(`[${deck}] Live ffmpeg exited (${code})`);
+    s.liveProcess = null;
+    if (s.mode === 'live') { s.mode = null; saveState(); }
+  });
 
-  s.ffmpeg = ffmpeg;
+  s.liveProcess = ffmpeg;
   s.mode = 'live';
-  s.isLive = false;
-  s.ffmpegSpawned = true;
-  savePersistedState();
+  s.liveActive = true;
+  saveState();
+
   return ffmpeg;
 }
 
-// ─── Playlist playback ────────────────────────────────────────────────────────
-function playPlaylistTrack(deck) {
+function stopLiveBroadcast(deck) {
   const s = state[deck];
-  if (!s.playlist || s.playlist.length === 0) return;
-
-  const idx = s.playlistIndex;
-  if (idx >= s.playlist.length) {
-    if (s.playlistLoop) {
-      // Re-shuffle if AutoDJ
-      if (s.autoDJActive) {
-        const files = getLibraryFiles();
-        if (files.length > 0) {
-          s.playlist = [...files].sort(() => Math.random() - 0.5)
-            .map(p => ({ path: p, name: path.basename(p), serverName: path.basename(p) }));
-        }
-      }
-      s.playlistIndex = 0;
-      savePersistedState();
-      playPlaylistTrack(deck);
-    } else {
-      console.log(`[${deck}] Playlist finished`);
-      s.mode = null;
-      s.autoDJActive = false;
-      savePersistedState();
-    }
-    return;
-  }
-
-  const track = s.playlist[idx];
-  s.mode = 'playlist';
-  s.trackPath = track.path;
-  s.trackName = track.name;
-  savePersistedState();
-
-  startFFmpegFile(deck, track.path, false, (d, code) => {
-    const ds = state[d];
-    if (ds.mode !== 'playlist') return;
-    ds.playlistIndex++;
-    savePersistedState();
-    playPlaylistTrack(d);
-  });
-}
-
-function stopFFmpeg(deck, silent = false) {
-  const s = state[deck];
-  if (s.ffmpeg) {
-    try { s.ffmpeg.stdin.end(); } catch (_) {}
-    try { s.ffmpeg.kill('SIGTERM'); } catch (_) {}
-    s.ffmpeg = null; s.isLive = false; s.ffmpegSpawned = false;
-    if (!silent) { s.mode = null; savePersistedState(); }
+  if (s.liveProcess) {
+    try { s.liveProcess.stdin.end(); } catch (_) {}
+    try { s.liveProcess.kill('SIGTERM'); } catch (_) {}
+    s.liveProcess = null;
+    s.liveActive = false;
   }
 }
 
-// ─── When DJ disconnects: fall back to AutoDJ after grace period ──────────────
-function onDJDisconnect(deck) {
-  const s = state[deck];
-  if (s.keepAliveTimer) { clearTimeout(s.keepAliveTimer); s.keepAliveTimer = null; }
-
-  // If already playing file/playlist (not live), keep going
-  if (s.mode === 'file' || s.mode === 'playlist') {
-    console.log(`[${deck}] DJ left — file/playlist mode continues`);
-    return;
-  }
-
-  console.log(`[${deck}] DJ left — AutoDJ starts in ${KEEP_ALIVE_MS / 1000}s`);
-  s.keepAliveTimer = setTimeout(() => {
-    s.keepAliveTimer = null;
-    if (!s.socket || s.socket.readyState !== WebSocket.OPEN) {
-      console.log(`[${deck}] Grace period ended — starting AutoDJ`);
-      stopFFmpeg(deck, true);
-      s.autoDJActive = false;
-      startAutoDJ(deck);
-    }
-  }, KEEP_ALIVE_MS);
-}
-
-// ─── Auto-resume on startup ───────────────────────────────────────────────────
-setTimeout(() => {
-  DECKS.forEach(deck => {
-    const s = state[deck];
-    if (s.persistedMode === 'playlist' && s.playlist.length > 0) {
-      console.log(`[${deck}] Resuming playlist from track ${s.playlistIndex}`);
-      s.mode = 'playlist';
-      playPlaylistTrack(deck);
-    } else if (s.persistedMode === 'file' && s.trackPath && fs.existsSync(s.trackPath)) {
-      console.log(`[${deck}] Resuming file: ${s.trackName}`);
-      startFFmpegFile(deck, s.trackPath, s.looping);
-    } else if (s.autoDJEnabled) {
-      console.log(`[${deck}] No saved state — starting AutoDJ`);
-      startAutoDJ(deck);
-    }
-  });
-}, 1500);
-
-// ─── WebSocket: live broadcast ────────────────────────────────────────────────
+// ─── WebSocket: receive live audio from browser DJ ────────────────────────────
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://localhost');
   const deck = url.searchParams.get('deck')?.toUpperCase();
@@ -347,77 +207,84 @@ wss.on('connection', (ws, req) => {
   if (!deck || !DECKS.includes(deck) || type !== 'broadcast') { ws.close(); return; }
 
   const s = state[deck];
-
-  if (s.keepAliveTimer) { clearTimeout(s.keepAliveTimer); s.keepAliveTimer = null; }
   if (s.socket && s.socket !== ws) { try { s.socket.close(); } catch (_) {} }
-
-  // Stop AutoDJ when DJ connects
-  stopAutoDJ(deck);
-
-  if (s.ffmpeg) {
-    console.log(`[${deck}] DJ connected — stopping AutoDJ/file ffmpeg`);
-    try { s.ffmpeg.stdin.end(); } catch (_) {}
-    try { s.ffmpeg.kill('SIGTERM'); } catch (_) {}
-    s.ffmpeg = null; s.isLive = false;
-  }
-
-  console.log(`[${deck}] DJ connected — live mode`);
   s.socket = ws;
-  s.pendingChunks = [];
-  s.ffmpegSpawned = false;
+
+  let ffmpegProc = null;
+  let spawned = false;
+  let pendingChunks = [];
+
+  console.log(`[${deck}] DJ connected via WebSocket`);
 
   ws.on('message', data => {
     const chunk = Buffer.from(data);
-    if (!s.ffmpegSpawned) {
-      s.pendingChunks.push(chunk);
-      s.ffmpegSpawned = true;
-      const ffmpeg = startFFmpegLive(deck);
-      if (ffmpeg?.stdin.writable) {
-        s.pendingChunks.forEach(c => { try { ffmpeg.stdin.write(c); } catch (_) {} });
-        s.pendingChunks = [];
+
+    if (!spawned) {
+      pendingChunks.push(chunk);
+      spawned = true;
+      ffmpegProc = startLiveBroadcast(deck, ws);
+      s.liveProcess = ffmpegProc;
+
+      // Write buffered chunks
+      if (ffmpegProc?.stdin.writable) {
+        pendingChunks.forEach(c => { try { ffmpegProc.stdin.write(c); } catch (_) {} });
+        pendingChunks = [];
       }
       return;
     }
-    if (s.ffmpeg?.stdin.writable) { try { s.ffmpeg.stdin.write(chunk); } catch (_) {} }
+
+    if (ffmpegProc?.stdin.writable) {
+      try { ffmpegProc.stdin.write(chunk); } catch (_) {}
+    }
   });
 
   ws.on('close', () => {
     console.log(`[${deck}] DJ disconnected`);
-    if (s.socket === ws) { s.socket = null; s.pendingChunks = []; onDJDisconnect(deck); }
+    if (s.socket === ws) {
+      s.socket = null;
+      stopLiveBroadcast(deck);
+      // Liquidsoap falls back to AutoDJ automatically since live harbor drops
+      s.mode = 'autodj';
+      s.autoDJActive = true;
+      saveState();
+    }
   });
 
-  ws.on('error', err => { console.error(`[${deck}] WS error:`, err.message); ws.close(); });
+  ws.on('error', e => { console.error(`[${deck}] WS:`, e.message); ws.close(); });
 });
 
 // ─── Library endpoints ────────────────────────────────────────────────────────
 app.post('/library/upload', upload.single('track'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-  console.log(`[Library] Uploaded: ${req.file.originalname} → ${req.file.filename}`);
+  console.log(`[Library] ${req.file.originalname} → ${req.file.filename}`);
   res.json({ ok: true, serverName: req.file.filename, originalName: req.file.originalname, size: req.file.size });
 });
 
 app.use('/library/audio', express.static(UPLOAD_DIR, {
-  setHeaders: res => { res.set('Cache-Control', 'public, max-age=3600'); res.set('Access-Control-Allow-Origin', '*'); },
+  setHeaders: res => {
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.set('Access-Control-Allow-Origin', '*');
+  },
 }));
 
 app.get('/library/files', (req, res) => {
   try {
-    const files = fs.readdirSync(UPLOAD_DIR).map(name => ({
-      serverName: name,
-      size: fs.statSync(path.join(UPLOAD_DIR, name)).size,
-    }));
+    const files = fs.readdirSync(UPLOAD_DIR)
+      .filter(f => /\.(mp3|wav|ogg|flac|aac|m4a)$/i.test(f))
+      .map(name => ({ serverName: name, size: fs.statSync(path.join(UPLOAD_DIR, name)).size }));
     res.json({ ok: true, files });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/library/files/:name', (req, res) => {
   const fp = path.join(UPLOAD_DIR, req.params.name);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
   try { fs.unlinkSync(fp); res.json({ ok: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── Deck control ─────────────────────────────────────────────────────────────
+// Load a specific track — tell Liquidsoap to queue it as a single-track playlist
 app.post('/deck/:deck/load', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
@@ -425,45 +292,44 @@ app.post('/deck/:deck/load', (req, res) => {
   if (!serverName) return res.status(400).json({ error: 'serverName required' });
   const fp = path.join(UPLOAD_DIR, serverName);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
-  const s = state[deck];
-  s.autoDJActive = false;
-  s.trackPath = fp; s.trackName = serverName; s.mode = null;
-  startFFmpegFile(deck, fp, loop || false);
-  res.json({ ok: true, deck, serverName });
-});
 
-app.post('/deck/:deck/play', (req, res) => {
-  const deck = req.params.deck?.toUpperCase();
-  if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const s = state[deck];
-  if (!s.trackPath || !fs.existsSync(s.trackPath)) return res.status(400).json({ error: 'No track' });
+  s.trackPath = fp;
+  s.trackName = serverName;
+  s.looping = loop || false;
+  s.mode = 'file';
   s.autoDJActive = false;
-  startFFmpegFile(deck, s.trackPath, req.body?.loop ?? s.looping);
-  res.json({ ok: true });
+
+  // Tell Liquidsoap to push this track next via request.push
+  liqCmd(`autodj_${deck}.push ${fp}`).then(() => {
+    liqCmd(`autodj_${deck}.skip`);
+  });
+
+  saveState();
+  res.json({ ok: true, deck, serverName });
 });
 
 app.post('/deck/:deck/stop', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const s = state[deck];
-  stopFFmpeg(deck);
+  stopLiveBroadcast(deck);
   s.playlist = []; s.playlistIndex = 0;
   s.trackPath = null; s.trackName = null;
-  s.autoDJActive = false;
-  savePersistedState();
+  s.mode = 'autodj'; s.autoDJActive = true;
+  saveState();
+  // Skip current track — liquidsoap autodj keeps going
+  liqCmd(`autodj_${deck}.skip`);
   res.json({ ok: true });
 });
 
-// AutoDJ toggle per deck
+// AutoDJ toggle
 app.post('/deck/:deck/autodj', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  const { enabled } = req.body;
   const s = state[deck];
-  s.autoDJEnabled = !!enabled;
-  savePersistedState();
-  if (s.autoDJEnabled && !s.ffmpeg) startAutoDJ(deck);
-  if (!s.autoDJEnabled && s.autoDJActive) { stopFFmpeg(deck); s.autoDJActive = false; }
+  s.autoDJEnabled = !!req.body.enabled;
+  saveState();
   res.json({ ok: true, autoDJEnabled: s.autoDJEnabled });
 });
 
@@ -484,25 +350,44 @@ app.post('/deck/:deck/playlist', (req, res) => {
   if (playlist.length === 0) return res.status(400).json({ error: 'No valid tracks on server' });
 
   const s = state[deck];
-  s.autoDJActive = false;
   s.playlist = playlist;
   s.playlistIndex = startIndex || 0;
   s.playlistLoop = loop || false;
   s.mode = 'playlist';
-  savePersistedState();
-  playPlaylistTrack(deck);
+  s.autoDJActive = false;
+  saveState();
+
+  // Push all tracks into Liquidsoap's request queue
+  playPlaylistFromIndex(deck, startIndex || 0);
   res.json({ ok: true, trackCount: playlist.length });
 });
+
+function playPlaylistFromIndex(deck, index) {
+  const s = state[deck];
+  if (!s.playlist.length) return;
+
+  // Clear queue then push tracks from index onwards
+  liqCmd(`autodj_${deck}.skip`).then(async () => {
+    const tracks = s.playlist.slice(index);
+    for (const track of tracks) {
+      await liqCmd(`autodj_${deck}.push ${track.path}`);
+    }
+    if (s.playlistLoop) {
+      // Push from beginning again
+      for (const track of s.playlist.slice(0, index)) {
+        await liqCmd(`autodj_${deck}.push ${track.path}`);
+      }
+    }
+  });
+}
 
 app.post('/deck/:deck/playlist/next', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const s = state[deck];
-  if (s.mode !== 'playlist' || !s.playlist.length) return res.status(400).json({ error: 'Not in playlist mode' });
-  s.playlistIndex = Math.min(s.playlistIndex + 1, s.playlist.length);
-  savePersistedState();
-  stopFFmpeg(deck, true); s.mode = 'playlist';
-  playPlaylistTrack(deck);
+  s.playlistIndex = Math.min(s.playlistIndex + 1, s.playlist.length - 1);
+  saveState();
+  liqCmd(`autodj_${deck}.skip`);
   res.json({ ok: true, newIndex: s.playlistIndex });
 });
 
@@ -511,12 +396,11 @@ app.post('/deck/:deck/playlist/jump', (req, res) => {
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const { index } = req.body;
   const s = state[deck];
-  if (s.mode !== 'playlist') return res.status(400).json({ error: 'Not in playlist mode' });
-  if (typeof index !== 'number' || index < 0 || index >= s.playlist.length) return res.status(400).json({ error: 'Invalid index' });
+  if (typeof index !== 'number' || index < 0 || index >= s.playlist.length)
+    return res.status(400).json({ error: 'Invalid index' });
   s.playlistIndex = index;
-  savePersistedState();
-  stopFFmpeg(deck, true); s.mode = 'playlist';
-  playPlaylistTrack(deck);
+  saveState();
+  playPlaylistFromIndex(deck, index);
   res.json({ ok: true, newIndex: index });
 });
 
@@ -531,39 +415,44 @@ app.use('/announcements/audio', express.static(ANN_DIR, {
 app.delete('/announcements/files/:name', (req, res) => {
   const fp = path.join(ANN_DIR, req.params.name);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
-  try { fs.unlinkSync(fp); res.json({ ok: true }); } catch (err) { res.status(500).json({ error: err.message }); }
+  try { fs.unlinkSync(fp); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── HLS static ───────────────────────────────────────────────────────────────
-app.use('/hls', express.static(HLS_DIR, {
-  setHeaders: (res, fp) => {
-    if (fp.endsWith('.m3u8')) { res.set('Content-Type', 'application/vnd.apple.mpegurl'); res.set('Cache-Control', 'no-cache'); }
-    else if (fp.endsWith('.ts')) { res.set('Content-Type', 'video/mp2t'); res.set('Cache-Control', 'public, max-age=60'); }
-  },
-}));
-
-// ─── Status / health / deck-info ─────────────────────────────────────────────
+// ─── Health / status / deck-info ─────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.get('/status', (req, res) => {
+app.get('/status', async (req, res) => {
   const live = {};
-  DECKS.forEach(deck => {
-    const hlsPath = path.join(HLS_DIR, deck.toLowerCase(), 'stream.m3u8');
-    live[deck] = !!(state[deck].ffmpeg) && fs.existsSync(hlsPath);
-  });
+  for (const deck of DECKS) {
+    try {
+      const result = await liqCmd(`out_${deck}.is_started`);
+      live[deck] = result.includes('true');
+    } catch { live[deck] = false; }
+  }
   res.json({ live });
 });
 
-app.get('/deck-info', (req, res) => {
+app.get('/deck-info', async (req, res) => {
   const info = {};
-  DECKS.forEach(deck => {
+  for (const deck of DECKS) {
     const s = state[deck];
-    const hlsPath = path.join(HLS_DIR, deck.toLowerCase(), 'stream.m3u8');
+    let currentTrackName = s.trackName || null;
+
+    // Ask Liquidsoap what's currently playing
+    try {
+      const metadata = await liqCmd(`autodj_${deck}.last_metadata`);
+      const titleMatch = metadata.match(/title="([^"]+)"/);
+      const fileMatch = metadata.match(/filename="([^"]+)"/);
+      if (titleMatch) currentTrackName = titleMatch[1];
+      else if (fileMatch) currentTrackName = path.basename(fileMatch[1]);
+    } catch (_) {}
+
     info[deck] = {
-      djConnected: !!(s.socket?.readyState === WebSocket.OPEN),
-      streaming: !!(s.ffmpeg) && fs.existsSync(hlsPath),
-      mode: s.mode,
-      trackName: s.trackName,
+      djConnected: !!(s.socket?.readyState === 1),
+      streaming: true, // Icecast/Liquidsoap always streaming
+      mode: s.liveActive ? 'live' : (s.mode || 'autodj'),
+      trackName: currentTrackName,
       trackPath: s.trackPath,
       looping: s.looping,
       playlistLength: s.playlist.length,
@@ -572,14 +461,27 @@ app.get('/deck-info', (req, res) => {
       currentTrack: s.mode === 'playlist' ? (s.playlist[s.playlistIndex] || null) : null,
       playlist: s.playlist,
       autoDJEnabled: s.autoDJEnabled,
-      autoDJActive: s.autoDJActive,
+      autoDJActive: !s.liveActive,
+      // Stream URLs for listeners
+      streamUrl: `http://${req.hostname}:8000/deck-${deck.toLowerCase()}`,
     };
-  });
+  }
   res.json(info);
+});
+
+// Proxy Icecast status for dashboard
+app.get('/icecast-status', async (req, res) => {
+  try {
+    const response = await fetch(`http://${ICECAST_HOST}:${ICECAST_PORT}/status-json.xsl`);
+    const data = await response.json();
+    res.json(data);
+  } catch (e) {
+    res.status(503).json({ error: 'Icecast not reachable' });
+  }
 });
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`SonicBeat Streaming Server on port ${PORT}`);
-  console.log(`Uploads: ${UPLOAD_DIR} | Announcements: ${ANN_DIR}`);
+  console.log(`[API] SonicBeat API on port ${PORT}`);
+  console.log(`[API] Icecast streams: http://${ICECAST_HOST}:${ICECAST_PORT}/deck-{a,b,c,d}`);
 });

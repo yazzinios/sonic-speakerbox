@@ -437,6 +437,14 @@ app.post('/library/upload', upload.single('track'), (req, res) => {
   res.json({ ok: true, ...info });
 });
 
+// Serve library audio files to the browser (for local deck loading)
+app.use('/library/audio', express.static(UPLOAD_DIR, {
+  setHeaders: (res) => {
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.set('Access-Control-Allow-Origin', '*');
+  },
+}));
+
 // List all library files on disk
 app.get('/library/files', (req, res) => {
   try {

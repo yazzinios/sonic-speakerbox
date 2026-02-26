@@ -23,7 +23,11 @@ FROM nginx:alpine
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
-# Write nginx config at build time using a heredoc so it's always fresh
+# Nginx config:
+#   /api/*  → streaming server (all REST endpoints)
+#   /ws     → streaming server WebSocket
+#   /hls/*  → streaming server HLS segments
+#   /*      → React SPA
 RUN printf 'server {\n\
     listen 80;\n\
     server_name _;\n\
@@ -31,36 +35,47 @@ RUN printf 'server {\n\
     index index.html;\n\
     resolver 127.0.0.11 valid=30s ipv6=off;\n\
 \n\
-    location / {\n\
-        try_files $uri $uri/ /index.html;\n\
+    # All streaming server API calls\n\
+    location /api/ {\n\
+        set $backend http://hls-server:3001;\n\
+        proxy_pass $backend/;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Host $host;\n\
+        proxy_set_header X-Real-IP $remote_addr;\n\
+        proxy_read_timeout 300s;\n\
+        proxy_send_timeout 300s;\n\
+        client_max_body_size 512m;\n\
+        add_header Access-Control-Allow-Origin * always;\n\
+        add_header Access-Control-Allow-Methods "GET, POST, DELETE, OPTIONS" always;\n\
+        add_header Access-Control-Allow-Headers "Content-Type" always;\n\
+        if ($request_method = OPTIONS) { return 204; }\n\
     }\n\
 \n\
+    # HLS segments (no /api prefix, served direct)\n\
     location /hls/ {\n\
-        set $hls http://hls-server:3001;\n\
-        proxy_pass $hls/hls/;\n\
+        set $backend http://hls-server:3001;\n\
+        proxy_pass $backend/hls/;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header Host $host;\n\
         add_header Cache-Control no-cache;\n\
         add_header Access-Control-Allow-Origin *;\n\
     }\n\
 \n\
-    location /status {\n\
-        set $hls http://hls-server:3001;\n\
-        proxy_pass $hls/status;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Host $host;\n\
-        add_header Access-Control-Allow-Origin *;\n\
-    }\n\
-\n\
+    # WebSocket for live broadcast\n\
     location /ws {\n\
-        set $hls http://hls-server:3001;\n\
-        proxy_pass $hls;\n\
+        set $backend http://hls-server:3001;\n\
+        proxy_pass $backend;\n\
         proxy_http_version 1.1;\n\
         proxy_set_header Upgrade $http_upgrade;\n\
         proxy_set_header Connection "upgrade";\n\
         proxy_set_header Host $host;\n\
         proxy_read_timeout 3600s;\n\
         proxy_send_timeout 3600s;\n\
+    }\n\
+\n\
+    # React SPA\n\
+    location / {\n\
+        try_files $uri $uri/ /index.html;\n\
     }\n\
 \n\
     location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {\n\

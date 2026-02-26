@@ -23,11 +23,13 @@ services:
       context: https://github.com/yazzinios/sonic-speakerbox.git#main:streaming-server
       no_cache: true
     container_name: hls-server
-    ports:
-      - "3001:3001"
+    # Port 3001 no longer exposed publicly — nginx proxies all traffic internally
+    # Uncomment the line below only if you need direct debug access:
+    # ports:
+    #   - "3001:3001"
     volumes:
       - sonicbeat-hls:/tmp/hls
-      - sonicbeat-uploads:/data/uploads
+      - sonicbeat-uploads:/data
     restart: always
     networks:
       sonicbeat-net:

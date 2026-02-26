@@ -22,6 +22,9 @@ export const STREAM_BASE = `${host}/stream`;
 /** Direct Icecast port — use this for VLC and external players */
 export const ICECAST_PORT = 8000;
 
+/** Direct Icecast base (host:port) — use in external player URLs */
+export const ICECAST_BASE = `${window.location.hostname}:${ICECAST_PORT}`;
+
 export const HLS_BASE = `${host}/stream`; // kept for compat
 
 export const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';

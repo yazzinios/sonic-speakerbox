@@ -17,7 +17,8 @@ import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut, Radio } from 'l
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { ALL_DECKS, DECK_COLORS, type DeckId } from '@/types/channels';
-import { STREAMING_SERVER } from '@/lib/streamingServer';
+import { STREAMING_SERVER, SERVER_MODE } from '@/lib/streamingServer';
+import { ServerModePanel } from '@/components/dj/ServerModePanel';
 import type { LibraryTrack } from '@/hooks/useLibrary';
 
 function decodeServerName(serverName: string): string {
@@ -219,6 +220,17 @@ const Index = () => {
         </header>
 
         <main className="max-w-6xl mx-auto space-y-4">
+
+          {/* ── SERVER MODE PANEL ────────────────────────────────────────── */}
+          {SERVER_MODE && (
+            <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Radio className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-bold tracking-wider text-primary">SERVER MODE — Browser is Remote Control Only</h2>
+              </div>
+              <ServerModePanel library={library} onLoadTrack={() => {}} />
+            </div>
+          )}
 
           {/* Stream live banner */}
           {serverHasStream && !isHosting && (

@@ -2,8 +2,7 @@ services:
 
   sonicbeat:
     build:
-      context: https://github.com/yazzinios/sonic-speakerbox.git
-      no_cache: true
+      context: .
       args:
         VITE_SUPABASE_PROJECT_ID: "iaedzkkysscmzsqccftn"
         VITE_SUPABASE_PUBLISHABLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlhZWR6a2t5c3NjbXpzcWNjZnRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMTkzNjEsImV4cCI6MjA4NzU5NTM2MX0.-sxVzHBLlSvofDvN73_0KkfT5Hc8waoeEKP7AdlYWps"
@@ -20,14 +19,13 @@ services:
 
   radio-server:
     build:
-      context: https://github.com/yazzinios/sonic-speakerbox.git#main:streaming-server
-      no_cache: true
+      context: ./streaming-server
     container_name: radio-server
     ports:
+      - "80:3001"     # Node.js API on host port 80
       - "8000:8000"   # Icecast — listeners connect here directly
                       # URL: http://YOUR_SERVER_IP:8000/deck-a
     environment:
-      # All services run inside this single container
       ICECAST_HOST: "localhost"
       ICECAST_PORT: "8000"
       ICECAST_SOURCE_PASSWORD: "sonicbeat_source_2024"

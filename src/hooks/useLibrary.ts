@@ -1,12 +1,10 @@
 /**
  * useLibrary — persistent music library
  *
- * - Files are uploaded to the streaming server (/data/uploads) which is a
- *   persistent Docker volume. They survive container restarts.
- * - Metadata (original name, server filename, size) is stored in Supabase
- *   so the DJ's library is restored on every login.
- * - Reconciliation ONLY removes stale DB entries when the server IS reachable.
- *   If the server is offline, we show all tracks optimistically (never delete).
+ * - Files are uploaded to the streaming server (/data/uploads) — persistent Docker volume.
+ * - Metadata is stored in Supabase so the library is restored on every login.
+ * - Deduplication uses a ref so it's always current, even across concurrent uploads.
+ * - Reconciliation ONLY removes stale entries when the server IS reachable.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
@@ -14,7 +12,7 @@ import { STREAMING_SERVER } from '@/lib/streamingServer';
 import { toast } from 'sonner';
 
 export interface LibraryTrack {
-  id: string;           // Supabase UUID
+  id: string;
   name: string;         // original filename (display)
   serverName: string;   // filename on the streaming server
   size: string;         // human-readable size
@@ -30,7 +28,13 @@ function formatSize(bytes: number): string {
 export function useLibrary() {
   const [tracks, setTracks] = useState<LibraryTrack[]>([]);
   const [loading, setLoading] = useState(true);
-  const uploadingRef = useRef<Set<string>>(new Set());
+
+  // Refs always reflect the latest state — safe in concurrent async callbacks
+  const tracksRef = useRef<LibraryTrack[]>([]);
+  const uploadingRef = useRef<Set<string>>(new Set()); // key = "name_size"
+
+  // Keep ref in sync with state
+  useEffect(() => { tracksRef.current = tracks; }, [tracks]);
 
   // ── Load library from Supabase on mount ──────────────────────────────────
   useEffect(() => {
@@ -47,7 +51,7 @@ export function useLibrary() {
         if (error) throw error;
         if (cancelled || !data) return;
 
-        // Try to reconcile with server — but ONLY delete stale entries if server responded
+        // Reconcile with server — ONLY prune if server responded
         let serverFiles: Set<string> | null = null;
         try {
           const res = await fetch(`${STREAMING_SERVER}/library/files`, {
@@ -58,15 +62,13 @@ export function useLibrary() {
             serverFiles = new Set((json.files || []).map((f: any) => f.serverName));
           }
         } catch {
-          // Server offline — keep serverFiles null, show all tracks
-          console.warn('[Library] Server offline — showing all library tracks without reconciliation');
+          console.warn('[Library] Server offline — skipping reconciliation');
         }
 
         const validTracks: LibraryTrack[] = [];
         const staleIds: string[] = [];
 
         for (const row of data) {
-          // Only prune if server responded AND file is missing
           if (serverFiles !== null && !serverFiles.has(row.server_name)) {
             staleIds.push(row.id);
             continue;
@@ -81,11 +83,13 @@ export function useLibrary() {
           });
         }
 
-        if (!cancelled) setTracks(validTracks);
+        if (!cancelled) {
+          setTracks(validTracks);
+          tracksRef.current = validTracks;
+        }
 
-        // Only clean stale entries when server confirmed they're gone
         if (staleIds.length > 0) {
-          console.log(`[Library] Cleaning ${staleIds.length} stale entries`);
+          console.log(`[Library] Pruning ${staleIds.length} missing entries`);
           supabase.from('library_tracks').delete().in('id', staleIds).then(() => {});
         }
       } catch (err) {
@@ -99,31 +103,31 @@ export function useLibrary() {
     return () => { cancelled = true; };
   }, []);
 
-  // ── Add tracks (upload to server + save to Supabase) ─────────────────────
+  // ── Add tracks ────────────────────────────────────────────────────────────
   const addTracks = useCallback(async (files: File[]) => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      toast.error('Not logged in');
-      return [];
-    }
+    if (!user) { toast.error('Not logged in'); return []; }
 
     const added: LibraryTrack[] = [];
 
     for (const file of files) {
-      // Deduplicate by name+size in current library
-      const exists = tracks.some(t => t.name === file.name && t.sizeBytes === file.size);
-      if (exists) {
+      const key = `${file.name}_${file.size}`;
+
+      // Check ref (always current) for duplicates already in library
+      const alreadyInLib = tracksRef.current.some(
+        t => t.name === file.name && t.sizeBytes === file.size
+      );
+      if (alreadyInLib) {
         toast.info(`"${file.name}" is already in your library`);
         continue;
       }
 
-      // Also skip if already uploading
-      const key = `${file.name}_${file.size}`;
+      // Skip if this exact file is currently being uploaded
       if (uploadingRef.current.has(key)) continue;
       uploadingRef.current.add(key);
 
       try {
-        // 1. Upload to streaming server
+        // 1. Upload file to streaming server
         const form = new FormData();
         form.append('track', file);
         const res = await fetch(`${STREAMING_SERVER}/library/upload`, {
@@ -133,7 +137,19 @@ export function useLibrary() {
         if (!res.ok) throw new Error(`Server upload failed: ${res.status}`);
         const json = await res.json();
 
-        // 2. Save metadata to Supabase
+        // 2. Check again after upload (another tab or concurrent call may have added it)
+        const stillDupe = tracksRef.current.some(
+          t => t.name === file.name && t.sizeBytes === file.size
+        );
+        if (stillDupe) {
+          // Clean up the duplicate file we just uploaded
+          fetch(`${STREAMING_SERVER}/library/files/${encodeURIComponent(json.serverName)}`, {
+            method: 'DELETE',
+          }).catch(() => {});
+          continue;
+        }
+
+        // 3. Save metadata to Supabase
         const { data: row, error } = await supabase
           .from('library_tracks')
           .insert({
@@ -157,10 +173,10 @@ export function useLibrary() {
         };
 
         added.push(track);
-        setTracks(prev => {
-          if (prev.some(t => t.id === track.id)) return prev;
-          return [...prev, track];
-        });
+        // Update both state and ref atomically
+        tracksRef.current = [...tracksRef.current, track];
+        setTracks([...tracksRef.current]);
+
       } catch (err) {
         console.error(`[Library] Failed to upload ${file.name}:`, err);
         toast.error(`Failed to upload ${file.name}`);
@@ -170,15 +186,16 @@ export function useLibrary() {
     }
 
     return added;
-  }, [tracks]);
+  }, []); // no deps — uses refs only
 
   // ── Delete a track ────────────────────────────────────────────────────────
   const deleteTrack = useCallback(async (id: string) => {
-    const track = tracks.find(t => t.id === id);
+    const track = tracksRef.current.find(t => t.id === id);
     if (!track) return;
 
-    // Remove from UI immediately
-    setTracks(prev => prev.filter(t => t.id !== id));
+    // Optimistic UI remove
+    tracksRef.current = tracksRef.current.filter(t => t.id !== id);
+    setTracks([...tracksRef.current]);
 
     // Delete from server
     try {
@@ -186,13 +203,13 @@ export function useLibrary() {
         method: 'DELETE',
       });
     } catch (err) {
-      console.warn('[Library] Server delete failed (file may not exist):', err);
+      console.warn('[Library] Server delete failed:', err);
     }
 
     // Delete from Supabase
     const { error } = await supabase.from('library_tracks').delete().eq('id', id);
     if (error) console.error('[Library] Supabase delete failed:', error);
-  }, [tracks]);
+  }, []);
 
   return { tracks, loading, addTracks, deleteTrack };
 }

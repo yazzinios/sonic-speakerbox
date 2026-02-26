@@ -13,7 +13,7 @@ import { StatsSection } from '@/components/dj/StatsSection';
 import { LibraryPanel } from '@/components/dj/LibraryPanel';
 import { PlaylistPanel } from '@/components/dj/PlaylistPanel';
 import { Button } from '@/components/ui/button';
-import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut, AlertCircle, Radio } from 'lucide-react';
+import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut, Radio } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { ALL_DECKS, DECK_COLORS, type DeckId } from '@/types/channels';

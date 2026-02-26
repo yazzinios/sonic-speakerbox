@@ -8,8 +8,6 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     icecast2 \
     liquidsoap \
-    liquidsoap-plugin-mp3 \
-    liquidsoap-plugin-icecast \
     ffmpeg \
     supervisor \
     nodejs \

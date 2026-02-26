@@ -27,6 +27,7 @@ services:
       - "3001:3001"
     volumes:
       - sonicbeat-hls:/tmp/hls
+      - sonicbeat-uploads:/data/uploads
     restart: always
     networks:
       sonicbeat-net:
@@ -44,3 +45,5 @@ networks:
 volumes:
   sonicbeat-hls:
     name: sonicbeat-hls
+  sonicbeat-uploads:
+    name: sonicbeat-uploads

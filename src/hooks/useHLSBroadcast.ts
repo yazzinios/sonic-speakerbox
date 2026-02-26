@@ -61,7 +61,9 @@ export function useHLSBroadcast() {
         return;
       }
 
-      // Small delay after connection to ensure server is ready, then start fresh recorder
+      // Wait 500ms after WS open before starting MediaRecorder.
+      // This gives the server time to kill the old ffmpeg process fully
+      // so it's ready to receive a clean WebM stream from scratch.
       setTimeout(() => {
         if (!broadcast.active || ws.readyState !== WebSocket.OPEN) return;
 
@@ -87,10 +89,13 @@ export function useHLSBroadcast() {
           console.error(`[${deckId}] MediaRecorder error:`, e);
         };
 
-        recorder.start(500); // 500ms chunks
+        // First timeslice is larger (1000ms) to ensure the full WebM header
+        // and initial clusters are included in the very first chunk sent to server.
+        // Subsequent chunks are 500ms each.
+        recorder.start(500);
         broadcast.recorder = recorder;
         console.log(`[${deckId}] Broadcasting on deck ${deckId}`);
-      }, 200);
+      }, 500);
     };
 
     ws.onclose = (e) => {

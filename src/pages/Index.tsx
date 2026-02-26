@@ -1,20 +1,24 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
 import { useHLSBroadcast } from '@/hooks/useHLSBroadcast';
 import { useRequestHost } from '@/hooks/useMusicRequests';
 import { useAuth } from '@/hooks/useAuth';
 import { useCloudSettings } from '@/hooks/useCloudSettings';
+import { useLibrary } from '@/hooks/useLibrary';
+import { usePlaylists } from '@/hooks/usePlaylist';
 import { Deck } from '@/components/dj/Deck';
 import { MicSection, type MicTarget } from '@/components/dj/MicSection';
 import { AnnouncementSection } from '@/components/dj/AnnouncementSection';
 import { StatsSection } from '@/components/dj/StatsSection';
-import { LibraryPanel, type LibraryTrack } from '@/components/dj/LibraryPanel';
+import { LibraryPanel } from '@/components/dj/LibraryPanel';
+import { PlaylistPanel } from '@/components/dj/PlaylistPanel';
 import { Button } from '@/components/ui/button';
-import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut } from 'lucide-react';
+import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut, AlertCircle, Radio } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { ALL_DECKS, DECK_COLORS, type DeckId } from '@/types/channels';
 import { STREAMING_SERVER } from '@/lib/streamingServer';
+import type { LibraryTrack } from '@/hooks/useLibrary';
 
 const Index = () => {
   const engine = useAudioEngine();
@@ -24,47 +28,50 @@ const Index = () => {
   const { isHosting, listenerCount, listenerCounts, startHosting, stopHosting } = useHLSBroadcast();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
+
+  // Server deck info (for playlist state display)
+  const [serverDeckInfo, setServerDeckInfo] = useState<Record<string, any>>({});
   const [serverHasStream, setServerHasStream] = useState(false);
-  const [library, setLibrary] = useState<LibraryTrack[]>([]);
 
-  const addTracksToLibrary = useCallback((files: File[]) => {
-    setLibrary(prev => {
-      const existing = new Set(prev.map(t => t.name + t.file.size));
-      const newTracks: LibraryTrack[] = files
-        .filter(f => !existing.has(f.name + f.size))
-        .map(f => ({
-          id: `${Date.now()}-${Math.random()}`,
-          name: f.name,
-          file: f,
-          size: f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(0)}KB` : `${(f.size / 1024 / 1024).toFixed(1)}MB`,
-          addedAt: Date.now(),
-        }));
-      return [...prev, ...newTracks];
-    });
-  }, []);
+  // Persistent library
+  const { tracks: library, loading: libraryLoading, addTracks, deleteTrack } = useLibrary();
 
-  const loadLibraryTrackToDeck = useCallback((track: LibraryTrack, deck: DeckId) => {
-    engine.loadTrack(deck, track.file);
-  }, [engine]);
+  // Playlists
+  const {
+    playlists, loading: playlistLoading,
+    createPlaylist, renamePlaylist, deletePlaylist,
+    addTracksToPlaylist, removeTrackFromPlaylist, moveTrack,
+    playPlaylistOnDeck, skipNext, jumpToTrack,
+  } = usePlaylists();
 
-  const deleteFromLibrary = useCallback((id: string) => {
-    setLibrary(prev => prev.filter(t => t.id !== id));
-  }, []);
+  // New playlist dialog (from library "new playlist..." button)
+  const [pendingTrackForPlaylist, setPendingTrackForPlaylist] = useState<LibraryTrack | null>(null);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [newPlaylistDeck, setNewPlaylistDeck] = useState<DeckId>('A');
 
-  // When DJ closes the browser, tell server to keep playing the uploaded tracks
+  // ── Poll server deck info every 3s ────────────────────────────────────────
   useEffect(() => {
-    const handleUnload = () => {
-      // Use sendBeacon (fire-and-forget, survives page unload) to tell server
-      // to switch each deck to file playback so music continues without the browser.
-      ALL_DECKS.forEach(deck => {
-        const url = `${STREAMING_SERVER}/deck/${deck}/play`;
-        const blob = new Blob([JSON.stringify({ loop: true })], { type: 'application/json' });
-        navigator.sendBeacon(url, blob);
-      });
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${STREAMING_SERVER}/deck-info`, { signal: AbortSignal.timeout(2500) });
+        if (!res.ok) return;
+        const info = await res.json();
+        if (!cancelled) setServerDeckInfo(info);
+        const anyStreaming = Object.values(info).some((d: any) => d.streaming);
+        if (!cancelled) setServerHasStream(anyStreaming && !isHosting);
+      } catch { /* server offline */ }
     };
-    window.addEventListener('beforeunload', handleUnload);
-    return () => window.removeEventListener('beforeunload', handleUnload);
-  }, []);
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isHosting]);
+
+  // ── Restore deck state on login ────────────────────────────────────────────
+  useEffect(() => {
+    const anyStreaming = Object.values(serverDeckInfo).some((d: any) => d.streaming);
+    if (anyStreaming && !isHosting) setServerHasStream(true);
+  }, [serverDeckInfo, isHosting]);
 
   useEffect(() => {
     if (settings.jingle_url) {
@@ -72,34 +79,59 @@ const Index = () => {
     }
   }, [settings.jingle_url]);
 
-  // Check if server has an active stream from a previous session
-  useEffect(() => {
-    const checkServerStream = async () => {
-      try {
-        const res = await fetch(`${STREAMING_SERVER}/deck-info`, { signal: AbortSignal.timeout(3000) });
-        if (!res.ok) return;
-        const info = await res.json();
-        const anyStreaming = Object.values(info).some((d: any) => d.streaming);
-        if (anyStreaming && !isHosting) {
-          console.log('[DJ] Server still has active streams from previous session');
-          setServerHasStream(true);
-        }
-      } catch {
-        // streaming server not reachable — ignore
-      }
-    };
-    checkServerStream();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // ── Stop server deck ────────────────────────────────────────────────────────
+  const stopServerDeck = useCallback(async (deck: DeckId) => {
+    try {
+      await fetch(`${STREAMING_SERVER}/deck/${deck}/stop`, { method: 'POST' });
+      toast.success(`Deck ${deck} stopped`);
+    } catch (err: any) {
+      toast.error(`Could not stop deck: ${err.message}`);
+    }
   }, []);
 
+  // ── Load library track to deck ─────────────────────────────────────────────
+  const loadLibraryTrackToDeck = useCallback(async (track: LibraryTrack, deck: DeckId) => {
+    try {
+      const res = await fetch(`${STREAMING_SERVER}/deck/${deck}/load`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverName: track.serverName, loop: false }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Server error');
+      }
+      toast.success(`"${track.name}" → Deck ${deck} ▶`);
+    } catch (err: any) {
+      toast.error(`Could not load to deck: ${err.message}`);
+    }
+  }, []);
+
+  // ── Handle "new playlist from track" ─────────────────────────────────────
+  const handleCreatePlaylistFromTrack = useCallback((track: LibraryTrack) => {
+    setPendingTrackForPlaylist(track);
+    setNewPlaylistName('My Playlist');
+    setNewPlaylistDeck('A');
+  }, []);
+
+  const confirmCreatePlaylist = async () => {
+    if (!newPlaylistName.trim() || !pendingTrackForPlaylist) return;
+    const pl = await createPlaylist(newPlaylistDeck, newPlaylistName.trim());
+    if (pl) {
+      await addTracksToPlaylist(pl.id, [pendingTrackForPlaylist]);
+      toast.success(`Added "${pendingTrackForPlaylist.name}" to "${newPlaylistName}"`);
+    }
+    setPendingTrackForPlaylist(null);
+    setNewPlaylistName('');
+  };
+
+  // ── Broadcast ──────────────────────────────────────────────────────────────
   const handleStartBroadcast = async () => {
-    // Ensure audio context is initialized and resumed (requires user gesture)
     const stream = engine.getOutputStream();
     if (!stream) {
       toast.error('Could not initialize audio. Try clicking a Play button first.');
       return;
     }
-    // Verify streaming server is reachable before connecting WebSockets
     try {
       const res = await fetch(`${STREAMING_SERVER}/health`, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) throw new Error('unhealthy');
@@ -107,7 +139,6 @@ const Index = () => {
       toast.error('Streaming server is not reachable. Make sure it is running on port 3001.');
       return;
     }
-    // Start HLS broadcast — one stream per deck
     startHosting(engine.getDeckOutputStream);
     setServerHasStream(false);
     if (!isListening) startListening();
@@ -124,17 +155,11 @@ const Index = () => {
   const fallbackCopy = (text: string, successMsg: string) => {
     const el = document.createElement('textarea');
     el.value = text;
-    el.style.position = 'fixed';
-    el.style.opacity = '0';
+    el.style.position = 'fixed'; el.style.opacity = '0';
     document.body.appendChild(el);
-    el.focus();
-    el.select();
-    try {
-      document.execCommand('copy');
-      toast.success(successMsg);
-    } catch {
-      toast.error('Could not copy — please copy manually: ' + text);
-    }
+    el.focus(); el.select();
+    try { document.execCommand('copy'); toast.success(successMsg); }
+    catch { toast.error('Could not copy — please copy manually: ' + text); }
     document.body.removeChild(el);
   };
 
@@ -144,19 +169,18 @@ const Index = () => {
   };
 
   const copyRequestLink = () => {
-    if (!requestPeerId) {
-      toast.error('Request system still initializing, try again in a second');
-      return;
-    }
+    if (!requestPeerId) { toast.error('Request system still initializing, try again in a second'); return; }
     const url = `${window.location.origin}/request?host=${requestPeerId}`;
     copyToClipboard(url, 'Request link copied!');
   };
 
   const handleStartMic = () => {
-    // micTarget is either 'all' or DeckId[] — pass the array directly
     const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
     engine.startMic(targets);
   };
+
+  // Count how many decks are live on server
+  const liveServerDecks = ALL_DECKS.filter(id => serverDeckInfo[id]?.streaming);
 
   return (
     <div className="min-h-screen bg-background p-3 md:p-4"
@@ -173,19 +197,51 @@ const Index = () => {
         </header>
 
         <main className="max-w-6xl mx-auto space-y-4">
-          {/* 4 Decks in 2x2 grid */}
+          {/* Server stream notification — shown when server is playing but we're not in control */}
+          {serverHasStream && !isHosting && (
+            <div className="rounded-lg border border-green-500/50 bg-green-500/10 p-3 flex items-start gap-3">
+              <Radio className="h-5 w-5 text-green-500 shrink-0 mt-0.5 animate-pulse" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-green-600">Stream is live from your last session</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                  {liveServerDecks.map(id => {
+                    const info = serverDeckInfo[id];
+                    return (
+                      <div key={id} className="flex items-center gap-1.5">
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${DECK_COLORS[id].class} border-current`}>{id}</span>
+                        <span className="text-xs text-muted-foreground truncate max-w-[140px]">
+                          {info.mode === 'playlist'
+                            ? `Playlist · track ${(info.playlistIndex || 0) + 1}/${info.playlistLength}`
+                            : info.trackName
+                              ? decodeServerName(info.trackName)
+                              : 'Live'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <Button size="sm" onClick={handleStartBroadcast} className="shrink-0 text-xs gap-1">
+                <Wifi className="h-3 w-3" /> Resume Control
+              </Button>
+            </div>
+          )}
+
+          {/* 4 Decks */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {ALL_DECKS.map(id => {
               const ch = channels.find(c => c.deck_id === id);
+              const deckInfo = serverDeckInfo[id] || {};
               return (
                 <Deck key={id} id={id}
                   state={engine.decks[id]}
                   analyser={engine.getAnalyser(id)}
                   channelName={ch?.name}
-                  onLoad={(f) => { addTracksToLibrary([f]); engine.loadTrack(id, f); }}
+                  serverInfo={deckInfo}
+                  onLoad={(f) => { addTracks([f]); engine.loadTrack(id, f); }}
                   onPlay={() => engine.play(id)}
                   onPause={() => engine.pause(id)}
-                  onStop={() => engine.stop(id)}
+                  onStop={() => { engine.stop(id); if (deckInfo.streaming) stopServerDeck(id); }}
                   onVolumeChange={(v) => engine.setVolume(id, v)}
                   onEQChange={(band, val) => engine.setEQ(id, band, val)}
                   onSpeedChange={(s) => engine.setSpeed(id, s)}
@@ -201,13 +257,33 @@ const Index = () => {
             })}
           </div>
 
-          {/* Library */}
-          <LibraryPanel
-            tracks={library}
-            onAddTracks={addTracksToLibrary}
-            onLoadToDeck={loadLibraryTrackToDeck}
-            onDelete={deleteFromLibrary}
-          />
+          {/* Library + Playlists side by side on large screens */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <LibraryPanel
+              tracks={library}
+              loading={libraryLoading}
+              onAddTracks={addTracks}
+              onLoadToDeck={loadLibraryTrackToDeck}
+              onDelete={deleteTrack}
+              playlists={playlists}
+              onAddToPlaylist={(track, playlistId) => addTracksToPlaylist(playlistId, [track])}
+              onCreatePlaylistFromTrack={handleCreatePlaylistFromTrack}
+            />
+
+            <PlaylistPanel
+              playlists={playlists}
+              loading={playlistLoading}
+              serverDeckInfo={serverDeckInfo}
+              onCreatePlaylist={createPlaylist}
+              onRenamePlaylist={renamePlaylist}
+              onDeletePlaylist={deletePlaylist}
+              onRemoveTrack={removeTrackFromPlaylist}
+              onMoveTrack={moveTrack}
+              onPlayOnDeck={playPlaylistOnDeck}
+              onSkipNext={skipNext}
+              onJumpToTrack={jumpToTrack}
+            />
+          </div>
 
           {/* Announcements */}
           <AnnouncementSection onPlayAnnouncement={engine.playAnnouncement} onDuckStart={engine.duckStart} onDuckEnd={engine.duckEnd} />
@@ -231,13 +307,9 @@ const Index = () => {
 
               {!isHosting ? (
                 <div className="space-y-2">
-                  {serverHasStream && (
-                    <p className="text-xs text-amber-500 font-medium">
-                      ⚡ Server has an active stream from your last session.
-                    </p>
-                  )}
                   <Button onClick={handleStartBroadcast} className="w-full">
-                    <Wifi className="h-4 w-4 mr-1" /> {serverHasStream ? 'Resume Broadcasting' : 'Start Broadcasting'}
+                    <Wifi className="h-4 w-4 mr-1" />
+                    {serverHasStream ? 'Resume Broadcasting' : 'Start Broadcasting'}
                   </Button>
                 </div>
               ) : (
@@ -297,8 +369,58 @@ const Index = () => {
           </div>
         </main>
       </div>
+
+      {/* New playlist from track dialog */}
+      {pendingTrackForPlaylist && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-card border rounded-xl p-5 w-80 space-y-3 shadow-2xl">
+            <h3 className="text-sm font-bold">Create New Playlist</h3>
+            <p className="text-xs text-muted-foreground truncate">
+              Adding: <span className="text-foreground">{pendingTrackForPlaylist.name}</span>
+            </p>
+            <input
+              type="text"
+              className="w-full rounded border bg-background text-xs px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder="Playlist name..."
+              value={newPlaylistName}
+              onChange={e => setNewPlaylistName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') confirmCreatePlaylist(); if (e.key === 'Escape') setPendingTrackForPlaylist(null); }}
+              autoFocus
+            />
+            <div>
+              <p className="text-[10px] text-muted-foreground mb-1">Assign to deck:</p>
+              <div className="flex gap-1">
+                {ALL_DECKS.map(d => (
+                  <button
+                    key={d}
+                    onClick={() => setNewPlaylistDeck(d)}
+                    className={`flex-1 text-xs font-bold py-1 rounded border transition-colors
+                      ${newPlaylistDeck === d ? `${DECK_COLORS[d].class} border-current bg-current/10` : 'border-muted-foreground/30 text-muted-foreground'}`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button className="flex-1 text-xs h-7" onClick={confirmCreatePlaylist} disabled={!newPlaylistName.trim()}>
+                Create & Add
+              </Button>
+              <Button variant="outline" className="flex-1 text-xs h-7" onClick={() => setPendingTrackForPlaylist(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+// Strip timestamp prefix from server filenames for display
+function decodeServerName(serverName: string): string {
+  // Files are stored as "1234567890_originalname.mp3"
+  return serverName.replace(/^\d+_/, '');
+}
 
 export default Index;

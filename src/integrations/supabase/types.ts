@@ -123,6 +123,33 @@ export type Database = {
         }
         Relationships: []
       }
+      library_tracks: {
+        Row: {
+          added_at: string
+          id: string
+          original_name: string
+          server_name: string
+          size_bytes: number
+          user_id: string
+        }
+        Insert: {
+          added_at?: string
+          id?: string
+          original_name: string
+          server_name: string
+          size_bytes?: number
+          user_id: string
+        }
+        Update: {
+          added_at?: string
+          id?: string
+          original_name?: string
+          server_name?: string
+          size_bytes?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       playlist_tracks: {
         Row: {
           created_at: string

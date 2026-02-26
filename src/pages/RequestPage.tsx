@@ -32,8 +32,8 @@ const RequestPage = () => {
     try {
       await sendRequest(peerId.trim(), { name, email, phone, song });
       toast.success('Request sent!');
-    } catch {
-      toast.error('Failed to send request. Check the DJ ID.');
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to send request. Check the DJ ID.');
     }
   };
 

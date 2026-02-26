@@ -5,6 +5,7 @@ import type { DeckId } from '@/types/channels';
 import { ALL_DECKS, DECK_COLORS } from '@/types/channels';
 import type { LibraryTrack } from '@/hooks/useLibrary';
 import type { Playlist } from '@/hooks/usePlaylist';
+import { SERVER_MODE } from '@/lib/streamingServer';
 
 interface LibraryProps {
   tracks: LibraryTrack[];
@@ -16,6 +17,8 @@ interface LibraryProps {
   playlists: Playlist[];
   onAddToPlaylist: (track: LibraryTrack, playlistId: string) => void;
   onCreatePlaylistFromTrack?: (track: LibraryTrack) => void;
+  /** Server mode: callback for loading to server deck (overrides onLoadToDeck) */
+  onServerLoadToDeck?: (track: LibraryTrack, deck: DeckId) => void;
 }
 
 export function LibraryPanel({
@@ -114,7 +117,10 @@ export function LibraryPanel({
                 {ALL_DECKS.map(deck => (
                   <button
                     key={deck}
-                    onClick={() => onLoadToDeck(track, deck)}
+                    onClick={() => SERVER_MODE && onServerLoadToDeck
+                      ? onServerLoadToDeck(track, deck)
+                      : onLoadToDeck(track, deck)
+                    }
                     className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition-colors
                       ${DECK_COLORS[deck].class} border-current hover:bg-current hover:text-background`}
                     title={`Load to Deck ${deck}`}

@@ -318,7 +318,39 @@ app.post('/deck/:deck/stop', (req, res) => {
   s.trackPath = null; s.trackName = null;
   s.mode = 'autodj'; s.autoDJActive = true;
   saveState();
-  // Skip current track — liquidsoap autodj keeps going
+  liqCmd(`autodj_${deck}.skip`);
+  res.json({ ok: true });
+});
+
+// Play = skip to current queued track (or resume AutoDJ)
+app.post('/deck/:deck/play', (req, res) => {
+  const deck = req.params.deck?.toUpperCase();
+  if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
+  const s = state[deck];
+  if (s.mode === 'file' && s.trackPath) {
+    liqCmd(`autodj_${deck}.push ${s.trackPath}`).then(() => liqCmd(`autodj_${deck}.skip`));
+  } else {
+    liqCmd(`autodj_${deck}.skip`);
+  }
+  s.autoDJActive = true;
+  saveState();
+  res.json({ ok: true });
+});
+
+// Pause = skip to blank silence (Liquidsoap fallback will play silence)
+// True pause is not possible with Icecast streaming — we skip to next/stop
+app.post('/deck/:deck/pause', (req, res) => {
+  const deck = req.params.deck?.toUpperCase();
+  if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
+  // Skip current track — Liquidsoap will fall back to silence or autodj
+  liqCmd(`autodj_${deck}.skip`);
+  res.json({ ok: true });
+});
+
+// Skip current track in any mode
+app.post('/deck/:deck/skip', (req, res) => {
+  const deck = req.params.deck?.toUpperCase();
+  if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   liqCmd(`autodj_${deck}.skip`);
   res.json({ ok: true });
 });

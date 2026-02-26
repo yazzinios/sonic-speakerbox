@@ -12,6 +12,8 @@ import RequestPage from "./pages/RequestPage";
 import AuthPage from "./pages/AuthPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import NotFound from "./pages/NotFound";
+import AnalyticsPage from "./pages/AnalyticsPage";
+import NowPlayingPage from "./pages/NowPlayingPage";
 
 const queryClient = new QueryClient();
 
@@ -29,6 +31,8 @@ const App = () => (
             <Route path="/request" element={<RequestPage />} />
             <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+            <Route path="/analytics" element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
+            <Route path="/now-playing" element={<NowPlayingPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

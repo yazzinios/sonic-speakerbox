@@ -4,9 +4,9 @@ services:
     build:
       context: .
       args:
-        VITE_SUPABASE_PROJECT_ID: "iaedzkkysscmzsqccftn"
-        VITE_SUPABASE_PUBLISHABLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlhZWR6a2t5c3NjbXpzcWNjZnRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMTkzNjEsImV4cCI6MjA4NzU5NTM2MX0.-sxVzHBLlSvofDvN73_0KkfT5Hc8waoeEKP7AdlYWps"
-        VITE_SUPABASE_URL: "https://iaedzkkysscmzsqccftn.supabase.co"
+        VITE_SUPABASE_PROJECT_ID: "${VITE_SUPABASE_PROJECT_ID}"
+        VITE_SUPABASE_PUBLISHABLE_KEY: "${VITE_SUPABASE_PUBLISHABLE_KEY}"
+        VITE_SUPABASE_URL: "${VITE_SUPABASE_URL}"
     container_name: sonicbeat
     ports:
       - "8083:80"
@@ -28,9 +28,9 @@ services:
     environment:
       ICECAST_HOST: "localhost"
       ICECAST_PORT: "8000"
-      ICECAST_SOURCE_PASSWORD: "sonicbeat_source_2024"
-      ICECAST_ADMIN_PASSWORD: "sonicbeat_admin_2024"
-      UPLOAD_DIR: "/data/uploads"
+      ICECAST_SOURCE_PASSWORD: "${ICECAST_SOURCE_PASSWORD:-sonicbeat_source_2024}"
+      ICECAST_ADMIN_PASSWORD: "${ICECAST_ADMIN_PASSWORD:-sonicbeat_admin_2024}"
+      UPLOAD_DIR: "${UPLOAD_DIR:-/data/uploads}"
       LIQ_HOST: "localhost"
       LIQ_TELNET_PORT: "1234"
       LIQ_HARBOR_PORT: "8005"

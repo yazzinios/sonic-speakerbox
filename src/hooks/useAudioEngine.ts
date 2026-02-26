@@ -71,7 +71,10 @@ export function useAudioEngine() {
   // User-configurable mic duck level (saved in localStorage)
   const [micDuckLevel, setMicDuckLevelState] = useState<number>(() => {
     const saved = localStorage.getItem('mic-duck-level');
-    return saved !== null ? parseFloat(saved) : DEFAULT_MIC_DUCK_LEVEL;
+    if (saved === null) return DEFAULT_MIC_DUCK_LEVEL;
+    const parsed = parseFloat(saved);
+    // Guard against NaN or out-of-range values stored in localStorage
+    return isNaN(parsed) || parsed < 0 || parsed > 1 ? DEFAULT_MIC_DUCK_LEVEL : parsed;
   });
 
   const setMicDuckLevel = useCallback((level: number) => {

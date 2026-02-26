@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
 import { useHLSBroadcast } from '@/hooks/useHLSBroadcast';
 import { useRequestHost } from '@/hooks/useMusicRequests';
@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useCloudSettings } from '@/hooks/useCloudSettings';
 import { useLibrary } from '@/hooks/useLibrary';
 import { usePlaylists } from '@/hooks/usePlaylist';
+import { useServerDeck } from '@/hooks/useServerDeck';
 import { Deck } from '@/components/dj/Deck';
 import { MicSection, type MicTarget } from '@/components/dj/MicSection';
 import { AnnouncementSection } from '@/components/dj/AnnouncementSection';
@@ -13,32 +14,23 @@ import { StatsSection } from '@/components/dj/StatsSection';
 import { LibraryPanel } from '@/components/dj/LibraryPanel';
 import { PlaylistPanel } from '@/components/dj/PlaylistPanel';
 import { Button } from '@/components/ui/button';
-import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut, Radio } from 'lucide-react';
+import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut, Radio, BarChart2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { ALL_DECKS, DECK_COLORS, type DeckId } from '@/types/channels';
-import { STREAMING_SERVER, SERVER_MODE } from '@/lib/streamingServer';
-import { ServerModePanel } from '@/components/dj/ServerModePanel';
+import { STREAMING_SERVER, SERVER_MODE, getDeckStreamUrl } from '@/lib/streamingServer';
 import type { LibraryTrack } from '@/hooks/useLibrary';
-
-function decodeServerName(serverName: string): string {
-  return serverName.replace(/^\d+_/, '');
-}
+import { useEffect } from 'react';
 
 const Index = () => {
   const engine = useAudioEngine();
+  const server = useServerDeck(); // always initialized — used in SERVER_MODE
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const { settings, channels } = useCloudSettings();
   const { isHosting, listenerCount, listenerCounts, startHosting, stopHosting } = useHLSBroadcast();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
-
-  const [serverDeckInfo, setServerDeckInfo] = useState<Record<string, any>>({});
-  const [serverHasStream, setServerHasStream] = useState(false);
-  // Always-current ref for use in event handlers / beforeunload
-  const serverDeckInfoRef = useRef<Record<string, any>>({});
-  useEffect(() => { serverDeckInfoRef.current = serverDeckInfo; }, [serverDeckInfo]);
 
   const { tracks: library, loading: libraryLoading, addTracks, deleteTrack } = useLibrary();
 
@@ -53,95 +45,48 @@ const Index = () => {
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [newPlaylistDeck, setNewPlaylistDeck] = useState<DeckId>('A');
 
-  // ── Poll server deck info every 3s ────────────────────────────────────────
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await fetch(`${STREAMING_SERVER}/deck-info`, { signal: AbortSignal.timeout(2500) });
-        if (!res.ok) return;
-        const info = await res.json();
-        if (!cancelled) {
-          setServerDeckInfo(info);
-          const anyStreaming = Object.values(info).some((d: any) => d.streaming);
-          setServerHasStream(anyStreaming && !isHosting);
-        }
-      } catch { /* server offline */ }
-    };
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [isHosting]);
-
-  // ── Keep stream alive when browser closes ─────────────────────────────────
-  // If a deck is in live WebSocket mode and the browser closes, switch it to
-  // file mode via sendBeacon so the stream keeps playing server-side.
-  useEffect(() => {
-    const handleUnload = () => {
-      const info = serverDeckInfoRef.current;
-      ALL_DECKS.forEach(deck => {
-        const d = info[deck];
-        if (!d) return;
-        // file/playlist modes already keep playing — only need to handle live mode
-        if (d.mode === 'live' && d.trackPath) {
-          navigator.sendBeacon(
-            `${STREAMING_SERVER}/deck/${deck}/play`,
-            new Blob([JSON.stringify({ loop: false })], { type: 'application/json' })
-          );
-        }
-      });
-    };
-    window.addEventListener('beforeunload', handleUnload);
-    return () => window.removeEventListener('beforeunload', handleUnload);
-  }, []);
-
+  // Load jingle if configured
   useEffect(() => {
     if (settings.jingle_url) {
-      fetch(settings.jingle_url).then(r => r.arrayBuffer()).then(b => engine.setCustomJingle(b)).catch(() => {});
+      fetch(settings.jingle_url)
+        .then(r => r.arrayBuffer())
+        .then(b => engine.setCustomJingle(b))
+        .catch(() => {});
     }
   }, [settings.jingle_url]);
 
-  // ── Stop server deck ──────────────────────────────────────────────────────
-  const stopServerDeck = useCallback(async (deck: DeckId) => {
-    try {
-      await fetch(`${STREAMING_SERVER}/deck/${deck}/stop`, { method: 'POST' });
-    } catch { /* ignore */ }
-  }, []);
-
-  // ── Load library track to deck ────────────────────────────────────────────
-  // FIX: fetches audio from server → loads into local engine (so it plays in
-  // browser with waveform) → tells server to stream it via HLS
+  // ── Library: load track to deck ─────────────────────────────────────────
+  // SERVER_MODE: only tell server — no browser audio
+  // BROWSER_MODE: fetch file + play locally + tell server to stream
   const loadLibraryTrackToDeck = useCallback(async (track: LibraryTrack, deck: DeckId) => {
+    if (SERVER_MODE) {
+      await server.loadTrack(deck, track);
+      return;
+    }
+    // Browser mode
     try {
-      // 1. Fetch audio blob from server for local playback
-      const fileRes = await fetch(
-        `${STREAMING_SERVER}/library/audio/${encodeURIComponent(track.serverName)}`
-      );
+      const fileRes = await fetch(`${STREAMING_SERVER}/library/audio/${encodeURIComponent(track.serverName)}`);
       if (!fileRes.ok) throw new Error('Audio file not found on server');
       const blob = await fileRes.blob();
       const file = new File([blob], track.name, { type: blob.type || 'audio/mpeg' });
-
-      // 2. Load into browser audio engine + auto-play
       engine.loadTrack(deck, file);
       engine.play(deck);
-
-      // 3. Tell server to also play it on the HLS stream
-      const res = await fetch(`${STREAMING_SERVER}/deck/${deck}/load`, {
+      await fetch(`${STREAMING_SERVER}/deck/${deck}/load`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ serverName: track.serverName, loop: false }),
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Server error');
-      }
       toast.success(`▶ "${track.name}" on Deck ${deck}`);
     } catch (err: any) {
       toast.error(`Could not load to deck: ${err.message}`);
     }
-  }, [engine]);
+  }, [engine, server]);
 
-  // ── Create playlist from track shortcut ──────────────────────────────────
+  // ── Playlist: play on deck ────────────────────────────────────────────────
+  // In server mode, playPlaylistOnDeck already sends to the API correctly
+  // (it calls STREAMING_SERVER/deck/:deck/playlist which Liquidsoap handles)
+
+  // ── Create playlist shortcut ──────────────────────────────────────────────
   const handleCreatePlaylistFromTrack = useCallback((track: LibraryTrack) => {
     setPendingTrackForPlaylist(track);
     setNewPlaylistName('My Playlist');
@@ -159,8 +104,12 @@ const Index = () => {
     setNewPlaylistName('');
   };
 
-  // ── Broadcast ─────────────────────────────────────────────────────────────
+  // ── Broadcast (browser mode only) ────────────────────────────────────────
   const handleStartBroadcast = async () => {
+    if (SERVER_MODE) {
+      toast.info('Server mode is active — audio streams from the server via Icecast, not the browser.');
+      return;
+    }
     const stream = engine.getOutputStream();
     if (!stream) {
       toast.error('Could not initialize audio. Try clicking Play first.');
@@ -170,14 +119,20 @@ const Index = () => {
       const res = await fetch(`${STREAMING_SERVER}/health`, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) throw new Error('unhealthy');
     } catch {
-      toast.error('Streaming server not reachable on port 3001.');
+      toast.error('Streaming server not reachable.');
       return;
     }
     startHosting(engine.getDeckOutputStream);
-    setServerHasStream(false);
     if (!isListening) startListening();
   };
 
+  // ── Mic ───────────────────────────────────────────────────────────────────
+  const handleStartMic = () => {
+    const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
+    engine.startMic(targets);
+  };
+
+  // ── Clipboard helpers ─────────────────────────────────────────────────────
   const copyToClipboard = (text: string, msg: string) => {
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(text).then(() => toast.success(msg)).catch(() => fallbackCopy(text, msg));
@@ -192,111 +147,133 @@ const Index = () => {
     document.body.removeChild(el);
   };
   const copyListenLink = (code: string) =>
-    copyToClipboard(`${window.location.origin}/listen?code=${code}`, `Listen link copied!`);
+    copyToClipboard(`${window.location.origin}/listen?code=${code}`, 'Listen link copied!');
   const copyRequestLink = () => {
     if (!requestPeerId) { toast.error('Request system initializing…'); return; }
     copyToClipboard(`${window.location.origin}/request?host=${requestPeerId}`, 'Request link copied!');
   };
 
-  const handleStartMic = () => {
-    const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
-    engine.startMic(targets);
-  };
-
-  const liveServerDecks = ALL_DECKS.filter(id => serverDeckInfo[id]?.streaming);
+  // serverDeckInfo shape expected by PlaylistPanel (raw object)
+  const serverDeckInfoForPlaylists: Record<string, any> = SERVER_MODE
+    ? Object.fromEntries(ALL_DECKS.map(id => [id, server.decks[id]]))
+    : {};
 
   return (
-    <div className="min-h-screen bg-background p-3 md:p-4"
-      style={settings.bg_image ? { backgroundImage: `url(${settings.bg_image})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' } : undefined}>
+    <div
+      className="min-h-screen bg-background p-3 md:p-4"
+      style={settings.bg_image
+        ? { backgroundImage: `url(${settings.bg_image})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }
+        : undefined
+      }
+    >
       {settings.bg_image && <div className="fixed inset-0 bg-background/80 backdrop-blur-sm -z-0" />}
       <div className="relative z-10">
+
+        {/* ── Header ──────────────────────────────────────────────────────── */}
         <header className="text-center mb-4">
           <div className="flex items-center justify-center gap-3">
             <h1 className="text-2xl font-bold text-primary tracking-[0.3em]">{settings.station_name}</h1>
+            {SERVER_MODE && (
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                server.serverOnline
+                  ? 'border-green-500/50 bg-green-500/10 text-green-400'
+                  : 'border-red-500/50 bg-red-500/10 text-red-400'
+              }`}>
+                {server.serverOnline ? '● SERVER' : '○ OFFLINE'}
+              </span>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => navigate('/analytics')}><BarChart2 className="h-4 w-4" /></Button>
             <Button size="sm" variant="ghost" onClick={() => navigate('/settings')}><Settings className="h-4 w-4" /></Button>
             <Button size="sm" variant="ghost" onClick={signOut}><LogOut className="h-4 w-4" /></Button>
           </div>
-          <p className="text-xs text-muted-foreground mt-1">4-Channel DJ Console</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {SERVER_MODE ? '4-Channel Server Radio — Browser Remote Control' : '4-Channel DJ Console'}
+          </p>
         </header>
 
         <main className="max-w-6xl mx-auto space-y-4">
 
-          {/* ── SERVER MODE PANEL ────────────────────────────────────────── */}
-          {SERVER_MODE && (
-            <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Radio className="h-4 w-4 text-primary" />
-                <h2 className="text-sm font-bold tracking-wider text-primary">SERVER MODE — Browser is Remote Control Only</h2>
+          {/* ── Server offline warning ───────────────────────────────────── */}
+          {SERVER_MODE && !server.serverOnline && (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 flex items-center gap-3">
+              <Radio className="h-5 w-5 text-red-400 shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-red-400">Server offline</p>
+                <p className="text-xs text-muted-foreground">
+                  Make sure the Docker containers are running: <code className="bg-muted px-1 rounded">docker compose up -d</code>
+                </p>
               </div>
-              <ServerModePanel library={library} onLoadTrack={() => {}} />
             </div>
           )}
 
-          {/* Stream live banner */}
-          {serverHasStream && !isHosting && (
-            <div className="rounded-lg border border-green-500/50 bg-green-500/10 p-3 flex items-start gap-3">
-              <Radio className="h-5 w-5 text-green-500 shrink-0 mt-0.5 animate-pulse" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-green-600">Stream is live from your last session</p>
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
-                  {liveServerDecks.map(id => {
-                    const info = serverDeckInfo[id];
-                    return (
-                      <div key={id} className="flex items-center gap-1.5">
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${DECK_COLORS[id].class} border-current`}>{id}</span>
-                        <span className="text-xs text-muted-foreground truncate max-w-[140px]">
-                          {info.mode === 'playlist'
-                            ? `Playlist · ${(info.playlistIndex || 0) + 1}/${info.playlistLength}`
-                            : info.trackName ? decodeServerName(info.trackName) : 'Live'}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+          {/* ── Server mode VLC instructions (shown once when online) ────── */}
+          {SERVER_MODE && server.serverOnline && (
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 flex flex-wrap items-center gap-3">
+              <Radio className="h-4 w-4 text-primary shrink-0" />
+              <p className="text-xs text-muted-foreground flex-1">
+                <span className="font-semibold text-foreground">VLC on Windows:</span>{' '}
+                Media → Open Network Stream → paste a stream URL from any deck below
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                {ALL_DECKS.map(id => (
+                  <button
+                    key={id}
+                    onClick={() => copyToClipboard(getDeckStreamUrl(id), `Deck ${id} stream URL copied!`)}
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded border ${DECK_COLORS[id].class} border-current hover:bg-current/10 transition-colors`}
+                  >
+                    {id}
+                  </button>
+                ))}
               </div>
-              <Button size="sm" onClick={handleStartBroadcast} className="shrink-0 text-xs gap-1">
-                <Wifi className="h-3 w-3" /> Resume Control
-              </Button>
             </div>
           )}
 
-          {/* 4 Decks */}
+          {/* ── 4 Decks ─────────────────────────────────────────────────── */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {ALL_DECKS.map(id => {
               const ch = channels.find(c => c.deck_id === id);
-              const deckInfo = serverDeckInfo[id] || {};
               return (
-                <Deck key={id} id={id}
-                  state={engine.decks[id]}
-                  analyser={engine.getAnalyser(id)}
+                <Deck
+                  key={id}
+                  id={id}
                   channelName={ch?.name}
-                  serverInfo={deckInfo}
-                  onLoad={(f) => { addTracks([f]); engine.loadTrack(id, f); }}
-                  onPlay={() => engine.play(id)}
-                  onPause={() => engine.pause(id)}
-                  onStop={() => { engine.stop(id); if (deckInfo.streaming) stopServerDeck(id); }}
-                  onVolumeChange={(v) => engine.setVolume(id, v)}
-                  onEQChange={(band, val) => engine.setEQ(id, band, val)}
-                  onSpeedChange={(s) => engine.setSpeed(id, s)}
-                  onSetLoopStart={() => engine.setLoopStart(id)}
-                  onSetLoopEnd={() => engine.setLoopEnd(id)}
-                  onToggleLoop={() => engine.toggleLoop(id)}
-                  onClearLoop={() => engine.clearLoop(id)}
-                  onYoutubeUrlChange={(url) => engine.setYoutubeUrl(id, url)}
-                  onYoutubePlay={() => engine.youtubePlay(id)}
-                  onYoutubeStop={() => engine.youtubeStop(id)}
+                  // Server mode props
+                  serverState={SERVER_MODE ? server.decks[id] : undefined}
+                  onServerPlay={SERVER_MODE ? () => server.play(id) : undefined}
+                  onServerPause={SERVER_MODE ? () => server.pause(id) : undefined}
+                  onServerStop={SERVER_MODE ? () => server.stop(id) : undefined}
+                  onServerSkip={SERVER_MODE ? () => server.skip(id) : undefined}
+                  onServerAutoDJ={SERVER_MODE ? (enabled) => server.setAutoDJ(id, enabled) : undefined}
+                  // Browser mode props
+                  browserState={!SERVER_MODE ? engine.decks[id] : undefined}
+                  analyser={!SERVER_MODE ? engine.getAnalyser(id) : undefined}
+                  onBrowserLoad={!SERVER_MODE ? (f) => { addTracks([f]); engine.loadTrack(id, f); } : undefined}
+                  onBrowserPlay={!SERVER_MODE ? () => engine.play(id) : undefined}
+                  onBrowserPause={!SERVER_MODE ? () => engine.pause(id) : undefined}
+                  onBrowserStop={!SERVER_MODE ? () => engine.stop(id) : undefined}
+                  onVolumeChange={!SERVER_MODE ? (v) => engine.setVolume(id, v) : undefined}
+                  onEQChange={!SERVER_MODE ? (band, val) => engine.setEQ(id, band, val) : undefined}
+                  onSpeedChange={!SERVER_MODE ? (s) => engine.setSpeed(id, s) : undefined}
+                  onSetLoopStart={!SERVER_MODE ? () => engine.setLoopStart(id) : undefined}
+                  onSetLoopEnd={!SERVER_MODE ? () => engine.setLoopEnd(id) : undefined}
+                  onToggleLoop={!SERVER_MODE ? () => engine.toggleLoop(id) : undefined}
+                  onClearLoop={!SERVER_MODE ? () => engine.clearLoop(id) : undefined}
+                  onYoutubeUrlChange={!SERVER_MODE ? (url) => engine.setYoutubeUrl(id, url) : undefined}
+                  onYoutubePlay={!SERVER_MODE ? () => engine.youtubePlay(id) : undefined}
+                  onYoutubeStop={!SERVER_MODE ? () => engine.youtubeStop(id) : undefined}
                 />
               );
             })}
           </div>
 
-          {/* Library + Playlists */}
+          {/* ── Library + Playlists ──────────────────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <LibraryPanel
               tracks={library}
               loading={libraryLoading}
               onAddTracks={addTracks}
               onLoadToDeck={loadLibraryTrackToDeck}
+              onServerLoadToDeck={SERVER_MODE ? loadLibraryTrackToDeck : undefined}
               onDelete={deleteTrack}
               playlists={playlists}
               onAddToPlaylist={(track, playlistId) => addTracksToPlaylist(playlistId, [track])}
@@ -305,37 +282,79 @@ const Index = () => {
             <PlaylistPanel
               playlists={playlists}
               loading={playlistLoading}
-              serverDeckInfo={serverDeckInfo}
+              serverDeckInfo={serverDeckInfoForPlaylists}
               onCreatePlaylist={createPlaylist}
               onRenamePlaylist={renamePlaylist}
               onDeletePlaylist={deletePlaylist}
               onRemoveTrack={removeTrackFromPlaylist}
               onMoveTrack={moveTrack}
               onPlayOnDeck={playPlaylistOnDeck}
-              onSkipNext={skipNext}
-              onJumpToTrack={jumpToTrack}
+              onSkipNext={SERVER_MODE ? server.playlistNext : skipNext}
+              onJumpToTrack={SERVER_MODE ? server.playlistJump : jumpToTrack}
             />
           </div>
 
-          <AnnouncementSection onPlayAnnouncement={engine.playAnnouncement} onDuckStart={engine.duckStart} onDuckEnd={engine.duckEnd} />
-          <StatsSection decks={engine.decks} micActive={engine.micActive} listenerCount={listenerCount} />
+          {/* ── Announcements ────────────────────────────────────────────── */}
+          <AnnouncementSection
+            onPlayAnnouncement={engine.playAnnouncement}
+            onDuckStart={engine.duckStart}
+            onDuckEnd={engine.duckEnd}
+          />
 
+          {/* ── Stats ────────────────────────────────────────────────────── */}
+          <StatsSection
+            decks={!SERVER_MODE ? engine.decks : undefined}
+            micActive={!SERVER_MODE ? engine.micActive : undefined}
+            listenerCount={listenerCount}
+            serverDecks={SERVER_MODE ? server.decks : undefined}
+            serverOnline={SERVER_MODE ? server.serverOnline : undefined}
+          />
+
+          {/* ── Bottom row: Mic / Broadcast / Requests ───────────────────── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <MicSection micActive={engine.micActive} jinglePlaying={engine.jinglePlaying}
-              micTarget={micTarget} onStartMic={handleStartMic} onStopMic={engine.stopMic} onMicTargetChange={setMicTarget} />
+
+            {/* Mic — always shown (browser mic routes to Icecast via live harbor) */}
+            <MicSection
+              micActive={engine.micActive}
+              jinglePlaying={engine.jinglePlaying}
+              micTarget={micTarget}
+              onStartMic={handleStartMic}
+              onStopMic={engine.stopMic}
+              onMicTargetChange={setMicTarget}
+            />
 
             {/* Broadcast */}
             <section className="rounded-lg border bg-card p-4 space-y-3">
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-bold tracking-wider">BROADCAST</h2>
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Users className="h-3 w-3" /><span>{listenerCount}</span>
-                </div>
+                {!SERVER_MODE && (
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Users className="h-3 w-3" /><span>{listenerCount}</span>
+                  </div>
+                )}
               </div>
-              {!isHosting ? (
+
+              {SERVER_MODE ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Server streams automatically via Icecast. Open VLC on Windows to listen:
+                  </p>
+                  {ALL_DECKS.map(id => (
+                    <div key={id} className="flex items-center gap-2">
+                      <span className={`text-xs font-bold ${DECK_COLORS[id].class}`}>{id}</span>
+                      <code className="flex-1 bg-background rounded px-2 py-1 text-[10px] font-mono truncate">
+                        {getDeckStreamUrl(id)}
+                      </code>
+                      <Button size="sm" variant="outline" className="h-6 w-6 p-0 shrink-0"
+                        onClick={() => copyToClipboard(getDeckStreamUrl(id), `Deck ${id} URL copied!`)}>
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : !isHosting ? (
                 <Button onClick={handleStartBroadcast} className="w-full">
-                  <Wifi className="h-4 w-4 mr-1" />
-                  {serverHasStream ? 'Resume Broadcasting' : 'Start Broadcasting'}
+                  <Wifi className="h-4 w-4 mr-1" /> Start Broadcasting
                 </Button>
               ) : (
                 <div className="space-y-2">
@@ -347,7 +366,8 @@ const Index = () => {
                       <span className="text-xs text-muted-foreground flex items-center gap-0.5">
                         <Users className="h-3 w-3" />{listenerCounts[ch.deck_id] ?? 0}
                       </span>
-                      <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => copyListenLink(ch.code)}>
+                      <Button size="sm" variant="outline" className="h-6 w-6 p-0"
+                        onClick={() => copyListenLink(ch.code)}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     </div>
@@ -370,31 +390,37 @@ const Index = () => {
                 <Music className="h-4 w-4 text-accent" />
                 <h2 className="text-lg font-bold tracking-wider">REQUESTS</h2>
                 {requests.length > 0 && (
-                  <span className="bg-accent text-accent-foreground text-xs px-1.5 py-0.5 rounded-full font-bold">{requests.length}</span>
+                  <span className="bg-accent text-accent-foreground text-xs px-1.5 py-0.5 rounded-full font-bold">
+                    {requests.length}
+                  </span>
                 )}
               </div>
               {requests.length === 0
                 ? <p className="text-xs text-muted-foreground text-center py-3">No song requests yet</p>
-                : <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                : (
+                  <div className="space-y-1 max-h-[200px] overflow-y-auto">
                     {requests.map(req => (
                       <div key={req.id} className="flex items-start gap-2 p-2 rounded bg-background text-xs">
                         <div className="flex-1 min-w-0">
                           <p className="font-bold truncate">{req.song}</p>
                           <p className="text-muted-foreground truncate">{req.name} • {req.phone}</p>
                         </div>
-                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 shrink-0" onClick={() => dismissRequest(req.id)}>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 shrink-0"
+                          onClick={() => dismissRequest(req.id)}>
                           <X className="h-3 w-3" />
                         </Button>
                       </div>
                     ))}
                   </div>
+                )
               }
             </section>
           </div>
+
         </main>
       </div>
 
-      {/* New playlist from track dialog */}
+      {/* ── Create playlist dialog ───────────────────────────────────────── */}
       {pendingTrackForPlaylist && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-card border rounded-xl p-5 w-80 space-y-3 shadow-2xl">
@@ -408,26 +434,37 @@ const Index = () => {
               placeholder="Playlist name..."
               value={newPlaylistName}
               onChange={e => setNewPlaylistName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') confirmCreatePlaylist(); if (e.key === 'Escape') setPendingTrackForPlaylist(null); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') confirmCreatePlaylist();
+                if (e.key === 'Escape') setPendingTrackForPlaylist(null);
+              }}
               autoFocus
             />
             <div>
               <p className="text-[10px] text-muted-foreground mb-1">Assign to deck:</p>
               <div className="flex gap-1">
                 {ALL_DECKS.map(d => (
-                  <button key={d} onClick={() => setNewPlaylistDeck(d)}
+                  <button
+                    key={d}
+                    onClick={() => setNewPlaylistDeck(d)}
                     className={`flex-1 text-xs font-bold py-1 rounded border transition-colors
-                      ${newPlaylistDeck === d ? `${DECK_COLORS[d].class} border-current bg-current/10` : 'border-muted-foreground/30 text-muted-foreground'}`}>
+                      ${newPlaylistDeck === d
+                        ? `${DECK_COLORS[d].class} border-current bg-current/10`
+                        : 'border-muted-foreground/30 text-muted-foreground'
+                      }`}
+                  >
                     {d}
                   </button>
                 ))}
               </div>
             </div>
             <div className="flex gap-2">
-              <Button className="flex-1 text-xs h-7" onClick={confirmCreatePlaylist} disabled={!newPlaylistName.trim()}>
+              <Button className="flex-1 text-xs h-7" onClick={confirmCreatePlaylist}
+                disabled={!newPlaylistName.trim()}>
                 Create & Add
               </Button>
-              <Button variant="outline" className="flex-1 text-xs h-7" onClick={() => setPendingTrackForPlaylist(null)}>
+              <Button variant="outline" className="flex-1 text-xs h-7"
+                onClick={() => setPendingTrackForPlaylist(null)}>
                 Cancel
               </Button>
             </div>

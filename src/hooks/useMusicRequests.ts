@@ -57,8 +57,15 @@ export function useRequestHost() {
 export function useRequestClient() {
   const [isSending, setIsSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const lastSentRef = useRef<number>(0);
+  const COOLDOWN_MS = 10_000; // 10s anti-spam guard
 
   const sendRequest = useCallback(async (hostId: string, request: Omit<MusicRequest, 'id' | 'timestamp'>) => {
+    const now = Date.now();
+    if (now - lastSentRef.current < COOLDOWN_MS) {
+      throw new Error('Please wait before sending another request.');
+    }
+    lastSentRef.current = now;
     setIsSending(true);
     return new Promise<void>((resolve, reject) => {
       const peer = new Peer();

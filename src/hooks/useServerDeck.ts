@@ -1,44 +1,56 @@
 /**
- * useServerDeck — Server Mode remote control hook
+ * useServerDeck — Server Mode state + control hook
  *
- * Instead of playing audio in the browser (Web Audio API),
- * this hook sends all commands to the Express API on the server.
- * Liquidsoap handles actual playback; Icecast streams it out.
+ * This is the SERVER_MODE equivalent of useAudioEngine.
+ * The browser never plays audio. Everything goes through the API.
  *
- * The browser is a pure remote control dashboard.
+ * - Polls /deck-info every 2s for live server state
+ * - Exposes all deck control actions (load, play, pause, stop, skip, autodj, playlist)
+ * - Returns server online status so the UI can show a warning if offline
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { DeckId } from '@/types/channels';
 import { STREAMING_SERVER, getDeckStreamUrl } from '@/lib/streamingServer';
 import { toast } from 'sonner';
+import type { LibraryTrack } from '@/hooks/useLibrary';
 
-export interface ServerDeckInfo {
+export interface ServerDeckState {
   mode: 'file' | 'playlist' | 'autodj' | 'live' | null;
   trackName: string | null;
+  trackPath: string | null;
   streaming: boolean;
   djConnected: boolean;
   autoDJEnabled: boolean;
   autoDJActive: boolean;
+  looping: boolean;
   playlistLength: number;
   playlistIndex: number;
+  playlistLoop: boolean;
+  currentTrack: { name: string; serverName: string } | null;
+  playlist: Array<{ name: string; serverName: string }>;
   streamUrl: string;
 }
 
-const EMPTY_DECK: ServerDeckInfo = {
+const EMPTY_DECK: ServerDeckState = {
   mode: null,
   trackName: null,
+  trackPath: null,
   streaming: false,
   djConnected: false,
   autoDJEnabled: true,
   autoDJActive: false,
+  looping: false,
   playlistLength: 0,
   playlistIndex: 0,
+  playlistLoop: false,
+  currentTrack: null,
+  playlist: [],
   streamUrl: '',
 };
 
-async function apiCall(path: string, method = 'GET', body?: object) {
+async function apiPost(path: string, body?: object) {
   const res = await fetch(`${STREAMING_SERVER}${path}`, {
-    method,
+    method: 'POST',
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -50,21 +62,24 @@ async function apiCall(path: string, method = 'GET', body?: object) {
 }
 
 export function useServerDeck() {
-  const [deckInfo, setDeckInfo] = useState<Record<DeckId, ServerDeckInfo>>({
-    A: { ...EMPTY_DECK },
-    B: { ...EMPTY_DECK },
-    C: { ...EMPTY_DECK },
-    D: { ...EMPTY_DECK },
+  const [decks, setDecks] = useState<Record<DeckId, ServerDeckState>>({
+    A: { ...EMPTY_DECK, streamUrl: getDeckStreamUrl('A') },
+    B: { ...EMPTY_DECK, streamUrl: getDeckStreamUrl('B') },
+    C: { ...EMPTY_DECK, streamUrl: getDeckStreamUrl('C') },
+    D: { ...EMPTY_DECK, streamUrl: getDeckStreamUrl('D') },
   });
   const [serverOnline, setServerOnline] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Poll server every 2 seconds for deck status
-  const fetchDeckInfo = useCallback(async () => {
+  const fetchStatus = useCallback(async () => {
     try {
-      const data = await apiCall('/deck-info');
+      const res = await fetch(`${STREAMING_SERVER}/deck-info`, {
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) throw new Error('not ok');
+      const data = await res.json();
       setServerOnline(true);
-      setDeckInfo({
+      setDecks({
         A: { ...EMPTY_DECK, ...data.A, streamUrl: getDeckStreamUrl('A') },
         B: { ...EMPTY_DECK, ...data.B, streamUrl: getDeckStreamUrl('B') },
         C: { ...EMPTY_DECK, ...data.C, streamUrl: getDeckStreamUrl('C') },
@@ -76,51 +91,68 @@ export function useServerDeck() {
   }, []);
 
   useEffect(() => {
-    fetchDeckInfo();
-    pollRef.current = setInterval(fetchDeckInfo, 2000);
+    fetchStatus();
+    pollRef.current = setInterval(fetchStatus, 2000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [fetchDeckInfo]);
+  }, [fetchStatus]);
 
-  /**
-   * Load a track onto a deck (server plays it via Liquidsoap)
-   */
-  const loadTrack = useCallback(async (deck: DeckId, serverName: string, loop = false) => {
+  // ── Deck actions ─────────────────────────────────────────────────────────
+
+  const loadTrack = useCallback(async (deck: DeckId, track: LibraryTrack, loop = false) => {
     try {
-      await apiCall(`/deck/${deck}/load`, 'POST', { serverName, loop });
-      toast.success(`Deck ${deck}: Now playing on server`);
-      fetchDeckInfo();
+      await apiPost(`/deck/${deck}/load`, { serverName: track.serverName, loop });
+      toast.success(`Deck ${deck} ▶ ${track.name}`);
+      fetchStatus();
     } catch (e: any) {
       toast.error(`Deck ${deck}: ${e.message}`);
     }
-  }, [fetchDeckInfo]);
+  }, [fetchStatus]);
 
-  /**
-   * Stop a deck (server returns to AutoDJ)
-   */
-  const stopDeck = useCallback(async (deck: DeckId) => {
+  const play = useCallback(async (deck: DeckId) => {
     try {
-      await apiCall(`/deck/${deck}/stop`, 'POST');
-      fetchDeckInfo();
+      await apiPost(`/deck/${deck}/play`);
+      fetchStatus();
     } catch (e: any) {
       toast.error(`Deck ${deck}: ${e.message}`);
     }
-  }, [fetchDeckInfo]);
+  }, [fetchStatus]);
 
-  /**
-   * Toggle AutoDJ on a deck
-   */
+  const pause = useCallback(async (deck: DeckId) => {
+    try {
+      await apiPost(`/deck/${deck}/pause`);
+      fetchStatus();
+    } catch (e: any) {
+      toast.error(`Deck ${deck}: ${e.message}`);
+    }
+  }, [fetchStatus]);
+
+  const stop = useCallback(async (deck: DeckId) => {
+    try {
+      await apiPost(`/deck/${deck}/stop`);
+      fetchStatus();
+    } catch (e: any) {
+      toast.error(`Deck ${deck}: ${e.message}`);
+    }
+  }, [fetchStatus]);
+
+  const skip = useCallback(async (deck: DeckId) => {
+    try {
+      await apiPost(`/deck/${deck}/skip`);
+      fetchStatus();
+    } catch (e: any) {
+      toast.error(`Deck ${deck}: ${e.message}`);
+    }
+  }, [fetchStatus]);
+
   const setAutoDJ = useCallback(async (deck: DeckId, enabled: boolean) => {
     try {
-      await apiCall(`/deck/${deck}/autodj`, 'POST', { enabled });
-      fetchDeckInfo();
+      await apiPost(`/deck/${deck}/autodj`, { enabled });
+      fetchStatus();
     } catch (e: any) {
       toast.error(`Deck ${deck}: ${e.message}`);
     }
-  }, [fetchDeckInfo]);
+  }, [fetchStatus]);
 
-  /**
-   * Load a playlist onto a deck
-   */
   const loadPlaylist = useCallback(async (
     deck: DeckId,
     tracks: Array<{ id: string; serverName: string; name: string }>,
@@ -128,48 +160,40 @@ export function useServerDeck() {
     startIndex = 0,
   ) => {
     try {
-      await apiCall(`/deck/${deck}/playlist`, 'POST', { tracks, loop, startIndex });
+      await apiPost(`/deck/${deck}/playlist`, { tracks, loop, startIndex });
       toast.success(`Deck ${deck}: Playlist loaded (${tracks.length} tracks)`);
-      fetchDeckInfo();
+      fetchStatus();
     } catch (e: any) {
       toast.error(`Deck ${deck}: ${e.message}`);
     }
-  }, [fetchDeckInfo]);
+  }, [fetchStatus]);
 
-  /**
-   * Skip to next track in playlist
-   */
   const playlistNext = useCallback(async (deck: DeckId) => {
     try {
-      await apiCall(`/deck/${deck}/playlist/next`, 'POST');
-      fetchDeckInfo();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
-    }
-  }, [fetchDeckInfo]);
+      await apiPost(`/deck/${deck}/playlist/next`);
+      fetchStatus();
+    } catch {}
+  }, [fetchStatus]);
 
-  /**
-   * Jump to specific playlist index
-   */
   const playlistJump = useCallback(async (deck: DeckId, index: number) => {
     try {
-      await apiCall(`/deck/${deck}/playlist/jump`, 'POST', { index });
-      fetchDeckInfo();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
-    }
-  }, [fetchDeckInfo]);
+      await apiPost(`/deck/${deck}/playlist/jump`, { index });
+      fetchStatus();
+    } catch {}
+  }, [fetchStatus]);
 
   return {
-    deckInfo,
+    decks,
     serverOnline,
     loadTrack,
-    stopDeck,
+    play,
+    pause,
+    stop,
+    skip,
     setAutoDJ,
     loadPlaylist,
     playlistNext,
     playlistJump,
-    getDeckStreamUrl,
-    refresh: fetchDeckInfo,
+    refresh: fetchStatus,
   };
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
 import { useHLSBroadcast } from '@/hooks/useHLSBroadcast';
 import { useRequestHost } from '@/hooks/useMusicRequests';
@@ -8,6 +8,7 @@ import { Deck } from '@/components/dj/Deck';
 import { MicSection, type MicTarget } from '@/components/dj/MicSection';
 import { AnnouncementSection } from '@/components/dj/AnnouncementSection';
 import { StatsSection } from '@/components/dj/StatsSection';
+import { LibraryPanel, type LibraryTrack } from '@/components/dj/LibraryPanel';
 import { Button } from '@/components/ui/button';
 import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
@@ -23,8 +24,32 @@ const Index = () => {
   const { isHosting, listenerCount, listenerCounts, startHosting, stopHosting } = useHLSBroadcast();
   const { requests, requestPeerId, isListening, startListening, stopListening, dismissRequest } = useRequestHost();
   const [micTarget, setMicTarget] = useState<MicTarget>('all');
-  // True when server has an active stream but DJ hasn't clicked broadcast yet
   const [serverHasStream, setServerHasStream] = useState(false);
+  const [library, setLibrary] = useState<LibraryTrack[]>([]);
+
+  const addTracksToLibrary = useCallback((files: File[]) => {
+    setLibrary(prev => {
+      const existing = new Set(prev.map(t => t.name + t.file.size));
+      const newTracks: LibraryTrack[] = files
+        .filter(f => !existing.has(f.name + f.size))
+        .map(f => ({
+          id: `${Date.now()}-${Math.random()}`,
+          name: f.name,
+          file: f,
+          size: f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(0)}KB` : `${(f.size / 1024 / 1024).toFixed(1)}MB`,
+          addedAt: Date.now(),
+        }));
+      return [...prev, ...newTracks];
+    });
+  }, []);
+
+  const loadLibraryTrackToDeck = useCallback((track: LibraryTrack, deck: DeckId) => {
+    engine.loadTrack(deck, track.file);
+  }, [engine]);
+
+  const deleteFromLibrary = useCallback((id: string) => {
+    setLibrary(prev => prev.filter(t => t.id !== id));
+  }, []);
 
   // When DJ closes the browser, tell server to keep playing the uploaded tracks
   useEffect(() => {
@@ -157,7 +182,7 @@ const Index = () => {
                   state={engine.decks[id]}
                   analyser={engine.getAnalyser(id)}
                   channelName={ch?.name}
-                  onLoad={(f) => engine.loadTrack(id, f)}
+                  onLoad={(f) => { addTracksToLibrary([f]); engine.loadTrack(id, f); }}
                   onPlay={() => engine.play(id)}
                   onPause={() => engine.pause(id)}
                   onStop={() => engine.stop(id)}
@@ -175,6 +200,14 @@ const Index = () => {
               );
             })}
           </div>
+
+          {/* Library */}
+          <LibraryPanel
+            tracks={library}
+            onAddTracks={addTracksToLibrary}
+            onLoadToDeck={loadLibraryTrackToDeck}
+            onDelete={deleteFromLibrary}
+          />
 
           {/* Announcements */}
           <AnnouncementSection onPlayAnnouncement={engine.playAnnouncement} onDuckStart={engine.duckStart} onDuckEnd={engine.duckEnd} />

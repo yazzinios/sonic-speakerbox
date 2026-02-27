@@ -24,6 +24,7 @@ interface LibraryProps {
 export function LibraryPanel({
   tracks, loading, onAddTracks, onLoadToDeck, onDelete,
   playlists, onAddToPlaylist, onCreatePlaylistFromTrack,
+  onServerLoadToDeck,
 }: LibraryProps) {
   const [draggingOver, setDraggingOver] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);

@@ -11,7 +11,7 @@
  * SERVER_MODE = false → original browser-playback mode (Web Audio API).
  */
 
-const host = `${window.location.protocol}//${window.location.hostname}`;
+const host = `${window.location.protocol}//${window.location.host}`;
 
 /** REST API base — all deck/library/playlist calls go here */
 export const STREAMING_SERVER = `${host}/api`;

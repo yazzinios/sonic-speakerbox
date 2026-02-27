@@ -22,9 +22,10 @@ services:
       context: ./streaming-server
     container_name: radio-server
     ports:
-      - "80:3001"     # Node.js API on host port 80
       - "8000:8000"   # Icecast — listeners connect here directly
                       # URL: http://YOUR_SERVER_IP:8000/deck-a
+      # Node.js API (port 3001) is NOT exposed directly — all traffic
+      # goes through nginx on port 8083 which proxies /api/ → radio-server:3001
     environment:
       ICECAST_HOST: "localhost"
       ICECAST_PORT: "8000"

@@ -4,9 +4,9 @@
 # Each channel: AutoDJ shuffle -> live DJ override -> Icecast
 # ============================================================
 
-settings.log.level := 3
-settings.log.file := false
-settings.init.daemon := false
+settings.log.level.set(3)
+settings.log.file.set("")
+settings.init.daemon.set(false)
 
 icecast_host = getenv("ICECAST_HOST")
 icecast_port = int_of_string(getenv("ICECAST_PORT"))

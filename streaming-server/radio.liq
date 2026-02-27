@@ -14,9 +14,9 @@ icecast_password = getenv("ICECAST_SOURCE_PASSWORD")
 upload_dir = getenv("UPLOAD_DIR")
 
 # Telnet server so Node.js API can send commands (skip, status, etc.)
-settings.server.telnet := true
-settings.server.telnet.bind_addr := "0.0.0.0"
-settings.server.telnet.port := 1234
+settings.server.telnet.set(true)
+settings.server.telnet.bind_addr.set("0.0.0.0")
+settings.server.telnet.port.set(1234)
 
 # Silence fallback when library is empty
 silence = blank(id="silence")

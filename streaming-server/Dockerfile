@@ -29,6 +29,7 @@ RUN npm install
 
 COPY server.js .
 COPY radio.liq .
+COPY settings.liq .
 COPY icecast.xml.template .
 COPY supervisord.conf /etc/supervisor/conf.d/sonicbeat.conf
 

@@ -18,4 +18,11 @@ echo "[Entrypoint] Upload dir: ${UPLOAD_DIR}"
 
 mkdir -p "${UPLOAD_DIR}" /data/announcements
 
+# Icecast refuses to run as root — create icecast user if not exists
+# and fix ownership of required dirs
+if ! id icecast2 >/dev/null 2>&1; then
+  adduser --system --group --no-create-home icecast2 || true
+fi
+chown -R icecast2:icecast2 /var/log/icecast2 /etc/icecast2 2>/dev/null || true
+
 exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf

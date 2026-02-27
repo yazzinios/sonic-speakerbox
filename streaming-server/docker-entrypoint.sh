@@ -1,4 +1,6 @@
 #!/bin/sh
+set -e
+
 # Generate icecast config from template with env vars substituted
 export ICECAST_HOST=${ICECAST_HOST:-localhost}
 export ICECAST_PORT=${ICECAST_PORT:-8000}

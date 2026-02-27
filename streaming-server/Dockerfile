@@ -1,14 +1,15 @@
 # ============================================================
 # SonicBeat Streaming Server
-# Runs 3 services: Icecast2 + Liquidsoap + Node.js API
+# Based on official Liquidsoap image (includes ffmpeg)
+# Adds: Icecast2 + Node.js API
 # ============================================================
-FROM debian:bookworm-slim
+FROM savonet/liquidsoap:v2.2.5
 
-# Install everything in one layer
+USER root
+
+# Install Icecast2, Node.js, supervisor
 RUN apt-get update && apt-get install -y --no-install-recommends \
     icecast2 \
-    liquidsoap \
-    ffmpeg \
     supervisor \
     nodejs \
     npm \
@@ -33,11 +34,6 @@ RUN mkdir -p /data/uploads /data/announcements /tmp/hls \
     && mkdir -p /var/log/supervisor \
     && mkdir -p /var/log/icecast2
 
-# Expose ports
-# 3001 = Node API (proxied by nginx as /api/)
-# 8000 = Icecast (proxied by nginx as /stream/)
-# 8005 = Liquidsoap harbor (internal only)
-# 1234 = Liquidsoap telnet (internal only)
 EXPOSE 3001 8000
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh

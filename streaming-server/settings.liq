@@ -1,5 +1,5 @@
 settings.log.level.set(3)
-settings.log.file.set("")
+settings.log.file.set(false)
 settings.init.daemon.set(false)
 settings.server.telnet.set(true)
 settings.server.telnet.bind_addr.set("0.0.0.0")

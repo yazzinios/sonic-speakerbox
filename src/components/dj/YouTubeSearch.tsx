@@ -35,8 +35,9 @@ export function YouTubeSearch({ onSelect }: YouTubeSearchProps) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Search failed');
       setResults(json.results || []);
-    } catch (e: any) {
-      setError(e.message || 'Search failed');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Search failed';
+      setError(message);
       setResults([]);
     } finally {
       setLoading(false);

@@ -47,7 +47,7 @@ export function useAnnouncements() {
         if (error) throw error;
         if (cancelled || !data) return;
 
-        const loaded: Announcement[] = data.map((row: any) => ({
+        const loaded: Announcement[] = (data || []).map((row: any) => ({
           id: row.id,
           name: row.title,
           category: row.category as AnnCategory,
@@ -129,7 +129,7 @@ export function useAnnouncements() {
           target_deck: target,
           voice_name: voiceName,
           scheduled_time: scheduledTime,
-        } as any)
+        })
         .select()
         .single();
 

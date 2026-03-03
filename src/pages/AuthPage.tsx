@@ -55,8 +55,9 @@ const AuthPage = () => {
         if (error) throw error;
         toast.success('Welcome back!');
       }
-    } catch (err: any) {
-      toast.error(err.message || 'Authentication error');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Authentication error';
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }

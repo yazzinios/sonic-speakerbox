@@ -69,7 +69,7 @@ export function useLibrary() {
           });
           if (res.ok) {
             const json = await res.json();
-            serverFiles = new Set((json.files || []).map((f: any) => f.serverName));
+            serverFiles = new Set((json.files || []).map((f: { serverName: string }) => f.serverName));
             console.log(`[Library] Server has ${serverFiles.size} files`);
           }
         } catch {
@@ -101,7 +101,7 @@ export function useLibrary() {
 
         if (staleIds.length > 0) {
           console.log(`[Library] Pruning ${staleIds.length} stale DB entries`);
-          supabase.from('library_tracks').delete().in('id', staleIds).then(() => {});
+          supabase.from('library_tracks').delete().in('id', staleIds).then(() => { });
         }
       } catch (err) {
         console.error('[Library] Load failed:', err);
@@ -172,7 +172,7 @@ export function useLibrary() {
           console.log(`[Library] Dedup after upload, deleting extra: ${serverName}`);
           fetch(`${STREAMING_SERVER}/library/files/${encodeURIComponent(serverName)}`, {
             method: 'DELETE',
-          }).catch(() => {});
+          }).catch(() => { });
           continue;
         }
 
@@ -195,7 +195,7 @@ export function useLibrary() {
           // Clean up the orphaned server file
           fetch(`${STREAMING_SERVER}/library/files/${encodeURIComponent(serverName)}`, {
             method: 'DELETE',
-          }).catch(() => {});
+          }).catch(() => { });
           throw new Error(`Database error: ${dbError.message} (code: ${dbError.code})`);
         }
 
@@ -215,9 +215,10 @@ export function useLibrary() {
         setTracks([...tracksRef.current]);
         toast.success(`"${file.name}" added to library`);
 
-      } catch (err: any) {
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         console.error(`[Library] Failed to add "${file.name}":`, err);
-        toast.error(`Upload failed: ${err.message}`);
+        toast.error(`Upload failed: ${message}`);
       } finally {
         uploadingRef.current.delete(key);
       }

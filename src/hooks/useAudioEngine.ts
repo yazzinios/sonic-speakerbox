@@ -184,6 +184,7 @@ export function useAudioEngine() {
       const gain = gainsRef.current[id];
       if (gain) gain.gain.setTargetAtTime(decks[id].volume * micDuck, t, 0.05);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decks.A.volume, decks.B.volume, decks.C.volume, decks.D.volume, micDuck]);
 
   const loadTrack = useCallback((deck: DeckId, file: File) => {
@@ -271,32 +272,35 @@ export function useAudioEngine() {
 
   const playJingle = useCallback((): Promise<void> => {
     const ctx = getCtx();
-    return new Promise(async (resolve) => {
-      setJinglePlaying(true);
-      const master = masterRef.current!;
-      if (customJingleRef.current) {
-        const audioBuffer = await ctx.decodeAudioData(customJingleRef.current.slice(0));
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        const g = ctx.createGain(); g.gain.value = 0.5;
-        source.connect(g); g.connect(master);
-        source.start();
-        source.onended = () => { setJinglePlaying(false); resolve(); };
-      } else {
-        const notes = [660, 660, 880];
-        const noteLen = 0.15; const gap = 0.12; const now = ctx.currentTime;
-        notes.forEach((freq, i) => {
-          const osc = ctx.createOscillator();
-          const g = ctx.createGain();
-          osc.frequency.value = freq; osc.type = 'sine'; g.gain.value = 0.3;
-          osc.connect(g); g.connect(master);
-          const t = now + i * (noteLen + gap);
-          osc.start(t); osc.stop(t + noteLen);
-          g.gain.setValueAtTime(0.3, t);
-          g.gain.exponentialRampToValueAtTime(0.001, t + noteLen);
-        });
-        setTimeout(() => { setJinglePlaying(false); resolve(); }, notes.length * (noteLen + gap) * 1000 + 100);
-      }
+    return new Promise((resolve) => {
+      const execute = async () => {
+        setJinglePlaying(true);
+        const master = masterRef.current!;
+        if (customJingleRef.current) {
+          const audioBuffer = await ctx.decodeAudioData(customJingleRef.current.slice(0));
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          const g = ctx.createGain(); g.gain.value = 0.5;
+          source.connect(g); g.connect(master);
+          source.start();
+          source.onended = () => { setJinglePlaying(false); resolve(); };
+        } else {
+          const notes = [660, 660, 880];
+          const noteLen = 0.15; const gap = 0.12; const now = ctx.currentTime;
+          notes.forEach((freq, i) => {
+            const osc = ctx.createOscillator();
+            const g = ctx.createGain();
+            osc.frequency.value = freq; osc.type = 'sine'; g.gain.value = 0.3;
+            osc.connect(g); g.connect(master);
+            const t = now + i * (noteLen + gap);
+            osc.start(t); osc.stop(t + noteLen);
+            g.gain.setValueAtTime(0.3, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + noteLen);
+          });
+          setTimeout(() => { setJinglePlaying(false); resolve(); }, notes.length * (noteLen + gap) * 1000 + 100);
+        }
+      };
+      execute();
     });
   }, [getCtx]);
 

@@ -45,7 +45,7 @@ export function usePlaylists() {
         if (cancelled || !playlistRows) return;
 
         // Only fetch tracks if there are playlists
-        let trackRows: any[] = [];
+        let trackRows: { id: string; playlist_id: string; title: string; source_url: string; position: number }[] = [];
         if (playlistRows.length > 0) {
           const { data: td, error: te } = await supabase
             .from('playlist_tracks')
@@ -211,14 +211,19 @@ export function usePlaylists() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Server error');
       toast.success(`▶ "${playlist.name}" on Deck ${deckId}`);
-    } catch (err: any) {
-      toast.error(`Failed to play playlist: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to play playlist: ${message}`);
     }
   }, []);
 
   // ── Skip / Jump ───────────────────────────────────────────────────────────
   const skipNext = useCallback(async (deckId: DeckId) => {
-    try { await fetch(`${STREAMING_SERVER}/deck/${deckId}/playlist/next`, { method: 'POST' }); } catch {}
+    try {
+      await fetch(`${STREAMING_SERVER}/deck/${deckId}/playlist/next`, { method: 'POST' });
+    } catch (err) {
+      console.error('[Playlist] skipNext failed:', err);
+    }
   }, []);
 
   const jumpToTrack = useCallback(async (deckId: DeckId, index: number) => {
@@ -228,7 +233,9 @@ export function usePlaylists() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index }),
       });
-    } catch {}
+    } catch (err) {
+      console.error('[Playlist] jumpToTrack failed:', err);
+    }
   }, []);
 
   return {

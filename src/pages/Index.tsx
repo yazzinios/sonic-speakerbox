@@ -12,7 +12,7 @@ import { MicSection, type MicTarget } from '@/components/dj/MicSection';
 import { AnnouncementSection } from '@/components/dj/AnnouncementSection';
 import { StatsSection } from '@/components/dj/StatsSection';
 import { LibraryPanel } from '@/components/dj/LibraryPanel';
-import { PlaylistPanel } from '@/components/dj/PlaylistPanel';
+import { PlaylistPanel, type ServerDeckInfo } from '@/components/dj/PlaylistPanel';
 import { Button } from '@/components/ui/button';
 import { Users, Wifi, WifiOff, Copy, Settings, Music, X, LogOut, Radio, BarChart2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -51,7 +51,7 @@ const Index = () => {
       fetch(settings.jingle_url)
         .then(r => r.arrayBuffer())
         .then(b => engine.setCustomJingle(b))
-        .catch(() => {});
+        .catch(() => { });
     }
   }, [settings.jingle_url]);
 
@@ -77,8 +77,9 @@ const Index = () => {
         body: JSON.stringify({ serverName: track.serverName, loop: false }),
       });
       toast.success(`▶ "${track.name}" on Deck ${deck}`);
-    } catch (err: any) {
-      toast.error(`Could not load to deck: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      toast.error(`Could not load to deck: ${message}`);
     }
   }, [engine, server]);
 
@@ -154,7 +155,7 @@ const Index = () => {
   };
 
   // serverDeckInfo shape expected by PlaylistPanel (raw object)
-  const serverDeckInfoForPlaylists: Record<string, any> = SERVER_MODE
+  const serverDeckInfoForPlaylists: Record<string, ServerDeckInfo> = SERVER_MODE
     ? Object.fromEntries(ALL_DECKS.map(id => [id, server.decks[id]]))
     : {};
 
@@ -174,11 +175,10 @@ const Index = () => {
           <div className="flex items-center justify-center gap-3">
             <h1 className="text-2xl font-bold text-primary tracking-[0.3em]">{settings.station_name}</h1>
             {SERVER_MODE && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                server.serverOnline
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${server.serverOnline
                   ? 'border-green-500/50 bg-green-500/10 text-green-400'
                   : 'border-red-500/50 bg-red-500/10 text-red-400'
-              }`}>
+                }`}>
                 {server.serverOnline ? '● SERVER' : '○ OFFLINE'}
               </span>
             )}

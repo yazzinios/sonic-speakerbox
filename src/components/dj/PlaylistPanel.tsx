@@ -9,11 +9,28 @@ import type { Playlist } from '@/hooks/usePlaylist';
 import type { DeckId } from '@/types/channels';
 import { ALL_DECKS, DECK_COLORS } from '@/types/channels';
 
+export interface ServerDeckInfo {
+  djConnected: boolean;
+  streaming: boolean;
+  mode: 'live' | 'file' | 'playlist' | 'autodj';
+  trackName: string | null;
+  trackPath: string | null;
+  looping: boolean;
+  playlistLength: number;
+  playlistIndex: number;
+  playlistLoop: boolean;
+  currentTrack: { name: string; serverName: string } | null;
+  playlist: Array<{ name: string; serverName: string }>;
+  autoDJEnabled: boolean;
+  autoDJActive: boolean;
+  streamUrl: string;
+}
+
 interface PlaylistPanelProps {
   playlists: Playlist[];
   loading: boolean;
-  serverDeckInfo: Record<string, any>;   // from /deck-info
-  onCreatePlaylist: (deckId: DeckId, name: string) => Promise<any>;
+  serverDeckInfo: Record<string, ServerDeckInfo>;   // from /deck-info
+  onCreatePlaylist: (deckId: DeckId, name: string) => Promise<unknown>;
   onRenamePlaylist: (id: string, name: string) => void;
   onDeletePlaylist: (id: string) => void;
   onRemoveTrack: (playlistId: string, trackId: string) => void;
@@ -111,9 +128,9 @@ export function PlaylistPanel({
       <div className="space-y-2 max-h-[500px] overflow-y-auto">
         {playlists.map(pl => {
           const isExpanded = expanded === pl.id;
-          const deckInfo = serverDeckInfo[pl.deckId] || {};
-          const isPlayingThis = deckInfo.mode === 'playlist' && deckInfo.playlistLength > 0;
-          const currentIdx = deckInfo.playlistIndex || 0;
+          const deckInfo = serverDeckInfo[pl.deckId];
+          const isPlayingThis = deckInfo ? (deckInfo.mode === 'playlist' && deckInfo.playlistLength > 0) : false;
+          const currentIdx = deckInfo?.playlistIndex || 0;
           const loop = loopStates[pl.id] || false;
 
           return (

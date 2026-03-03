@@ -28,9 +28,11 @@ const ResetPasswordPage = () => {
       if (error) throw error;
       toast.success('Password updated! Redirecting...');
       setTimeout(() => navigate('/'), 1500);
-    } catch (err: any) {
-      toast.error(err.message);
-    } finally {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'An error occurred';
+      toast.error(message);
+    }
+    finally {
       setSubmitting(false);
     }
   };

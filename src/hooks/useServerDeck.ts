@@ -103,8 +103,9 @@ export function useServerDeck() {
       await apiPost(`/deck/${deck}/load`, { serverName: track.serverName, loop });
       toast.success(`Deck ${deck} ▶ ${track.name}`);
       fetchStatus();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
     }
   }, [fetchStatus]);
 
@@ -112,8 +113,9 @@ export function useServerDeck() {
     try {
       await apiPost(`/deck/${deck}/play`);
       fetchStatus();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
     }
   }, [fetchStatus]);
 
@@ -121,8 +123,9 @@ export function useServerDeck() {
     try {
       await apiPost(`/deck/${deck}/pause`);
       fetchStatus();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
     }
   }, [fetchStatus]);
 
@@ -130,8 +133,9 @@ export function useServerDeck() {
     try {
       await apiPost(`/deck/${deck}/stop`);
       fetchStatus();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
     }
   }, [fetchStatus]);
 
@@ -139,8 +143,9 @@ export function useServerDeck() {
     try {
       await apiPost(`/deck/${deck}/skip`);
       fetchStatus();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
     }
   }, [fetchStatus]);
 
@@ -148,8 +153,9 @@ export function useServerDeck() {
     try {
       await apiPost(`/deck/${deck}/autodj`, { enabled });
       fetchStatus();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
     }
   }, [fetchStatus]);
 
@@ -163,8 +169,9 @@ export function useServerDeck() {
       await apiPost(`/deck/${deck}/playlist`, { tracks, loop, startIndex });
       toast.success(`Deck ${deck}: Playlist loaded (${tracks.length} tracks)`);
       fetchStatus();
-    } catch (e: any) {
-      toast.error(`Deck ${deck}: ${e.message}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
     }
   }, [fetchStatus]);
 
@@ -172,14 +179,14 @@ export function useServerDeck() {
     try {
       await apiPost(`/deck/${deck}/playlist/next`);
       fetchStatus();
-    } catch {}
+    } catch { }
   }, [fetchStatus]);
 
   const playlistJump = useCallback(async (deck: DeckId, index: number) => {
     try {
       await apiPost(`/deck/${deck}/playlist/jump`, { index });
       fetchStatus();
-    } catch {}
+    } catch { }
   }, [fetchStatus]);
 
   return {

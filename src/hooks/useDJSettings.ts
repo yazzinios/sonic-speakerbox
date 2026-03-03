@@ -12,7 +12,9 @@ function loadSettings(): DJSettings {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) return JSON.parse(stored);
-  } catch {}
+  } catch (err) {
+    console.error('[DJSettings] Load failed:', err);
+  }
   return { backgroundImage: '', djName: '', stationName: 'DJ CONSOLE' };
 }
 

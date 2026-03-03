@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, TrendingUp, Music, Users, Radio, Clock } from 'lucide-react';
+import { ArrowLeft, TrendingUp, Music, Users, Radio, Clock, type LucideIcon } from 'lucide-react';
 import { ALL_DECKS, DECK_COLORS, type DeckId } from '@/types/channels';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
+  type TooltipProps
 } from 'recharts';
 
 // ─── Mock data generators ──────────────────────────────────────────────────
@@ -49,7 +50,7 @@ function generateListenerTrend() {
 
 // ─── Stat card ────────────────────────────────────────────────────────────
 function StatCard({ icon: Icon, label, value, sub, color }: {
-  icon: any; label: string; value: string; sub: string; color: string;
+  icon: LucideIcon; label: string; value: string; sub: string; color: string;
 }) {
   return (
     <div className="rounded-xl border bg-card p-5 flex gap-4 items-center">
@@ -66,12 +67,12 @@ function StatCard({ icon: Icon, label, value, sub, color }: {
 }
 
 // ─── Custom tooltip ───────────────────────────────────────────────────────
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
   if (active && payload?.length) {
     return (
       <div className="bg-card border rounded-lg px-3 py-2 text-xs shadow-lg">
         <p className="font-bold text-foreground">{label}</p>
-        {payload.map((p: any) => (
+        {payload.map((p) => (
           <p key={p.name} style={{ color: p.color }}>{p.name}: {p.value}</p>
         ))}
       </div>

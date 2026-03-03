@@ -50,6 +50,7 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
     loadVoices();
     window.speechSynthesis?.addEventListener('voiceschanged', loadVoices);
     return () => window.speechSynthesis?.removeEventListener('voiceschanged', loadVoices);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const maleVoices = voices.filter(v => /male|david|james|daniel|google uk english male/i.test(v.name) && !/female/i.test(v.name));
@@ -71,7 +72,7 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
     setSaving(false);
     setNewName(''); setNewText(''); setNewSchedule(''); setNewFile(null);
     setShowAdd(false);
-  }, [newName, newFile, newText, newSchedule, newVoice, newTarget, newCategory, addAnnouncement]);
+  }, [newName, newFile, newText, newSchedule, newVoice, newTarget, newCategory, addAnnouncement, setShowAdd]);
 
   const speakText = useCallback((text: string, voiceName?: string, duck: boolean = false) => {
     if (!text.trim() || !('speechSynthesis' in window)) return;

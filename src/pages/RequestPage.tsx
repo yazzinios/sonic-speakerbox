@@ -11,7 +11,7 @@ const RequestPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const hostId = searchParams.get('host') || '';
-  
+
   const { isSending, sent, sendRequest, reset } = useRequestClient();
   const [peerId, setPeerId] = useState(hostId);
   const [name, setName] = useState('');
@@ -32,8 +32,9 @@ const RequestPage = () => {
     try {
       await sendRequest(peerId.trim(), { name, email, phone, song });
       toast.success('Request sent!');
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to send request. Check the DJ ID.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to send request. Check the DJ ID.';
+      toast.error(message);
     }
   };
 

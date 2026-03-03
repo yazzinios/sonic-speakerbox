@@ -31,18 +31,18 @@ export function LibraryPanel({
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDraggingOver(false);
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('audio/'));
-    if (files.length) handleFiles(files);
-  }, []);
-
   const handleFiles = useCallback(async (files: File[]) => {
     setUploading(true);
     await onAddTracks(files);
     setUploading(false);
   }, [onAddTracks]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDraggingOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('audio/'));
+    if (files.length) handleFiles(files);
+  }, [handleFiles]);
 
   return (
     <section className="rounded-lg border bg-card p-4 space-y-3">

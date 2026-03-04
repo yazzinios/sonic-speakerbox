@@ -11,13 +11,11 @@
  * SERVER_MODE = false → original browser-playback mode (Web Audio API).
  */
 
-const host = `${window.location.protocol}//${window.location.host}`;
-
 /** REST API base — all deck/library/playlist calls go here */
-export const STREAMING_SERVER = `${host}/api`;
+export const STREAMING_SERVER = "/api";
 
 /** Icecast stream base URL through nginx proxy (for in-browser preview only) */
-export const STREAM_BASE = `${host}/stream`;
+export const STREAM_BASE = "/stream";
 
 /** Direct Icecast port — use this for VLC and external players */
 export const ICECAST_PORT = 8000;
@@ -27,8 +25,8 @@ export const ICECAST_BASE = `${window.location.hostname}:${ICECAST_PORT}`;
 
 export const HLS_BASE = `${host}/stream`; // kept for compat
 
-export const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
-export const WS_SERVER = `${WS_PROTOCOL}://${window.location.hostname}/ws`;
+export const WS_PROTOCOL = window.location.protocol === "https:" ? "wss:" : "ws:";
+export const WS_SERVER = `${WS_PROTOCOL}//${window.location.host}/ws`;
 
 /**
  * SERVER MODE

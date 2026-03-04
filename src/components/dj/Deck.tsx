@@ -39,6 +39,8 @@ interface DeckProps {
   onServerStop?: () => void;
   onServerSkip?: () => void;
   onServerAutoDJ?: (enabled: boolean) => void;
+  onServerStartStream?: () => void;
+  onServerStopStream?: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -62,6 +64,7 @@ export function Deck({
   onYoutubeUrlChange, onYoutubePlay, onYoutubeStop,
   serverState,
   onServerPlay, onServerPause, onServerStop, onServerSkip, onServerAutoDJ,
+  onServerStartStream, onServerStopStream,
 }: DeckProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
@@ -132,9 +135,9 @@ export function Deck({
   // Mode badge
   const modeBadge = isServerMode ? (
     serverState?.mode === 'live' ? '🔴 Live' :
-    serverState?.mode === 'playlist' ? '📋 Playlist' :
-    serverState?.mode === 'file' ? '🎵 File' :
-    serverState?.mode === 'autodj' ? '🔀 AutoDJ' : null
+      serverState?.mode === 'playlist' ? '📋 Playlist' :
+        serverState?.mode === 'file' ? '🎵 File' :
+          serverState?.mode === 'autodj' ? '🔀 AutoDJ' : null
   ) : null;
 
   const copyStreamUrl = () => {
@@ -146,9 +149,8 @@ export function Deck({
   };
 
   return (
-    <div className={`rounded-lg border bg-card p-3 space-y-2 transition-colors ${
-      isServerMode && serverState?.streaming ? `border-${color.class}/40` : ''
-    }`}>
+    <div className={`rounded-lg border bg-card p-3 space-y-2 transition-colors ${isServerMode && serverState?.streaming ? `border-${color.class}/40` : ''
+      }`}>
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
@@ -224,6 +226,17 @@ export function Deck({
             >
               <Shuffle className="h-3 w-3 mr-1" />
               ADJ
+            </Button>
+            {/* Stream On/Off Toggle */}
+            <Button
+              size="sm"
+              variant={serverState?.streaming ? 'destructive' : 'default'}
+              className="h-7 px-2 text-[10px] font-bold"
+              onClick={() => serverState?.streaming ? onServerStopStream?.() : onServerStartStream?.()}
+              title={serverState?.streaming ? 'Stop Stream (Go Offline)' : 'Start Stream (Go Live)'}
+            >
+              <Radio className={`h-3 w-3 mr-1 ${serverState?.streaming ? 'animate-pulse' : ''}`} />
+              {serverState?.streaming ? 'ON' : 'OFF'}
             </Button>
             {/* Copy VLC URL */}
             <Button size="sm" variant="ghost" className="h-7 w-7 p-0 ml-auto" onClick={copyStreamUrl}

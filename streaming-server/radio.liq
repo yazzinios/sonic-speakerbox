@@ -5,9 +5,18 @@ icecast_host = getenv("ICECAST_HOST")
 icecast_port = int_of_string(getenv("ICECAST_PORT"))
 icecast_password = getenv("ICECAST_SOURCE_PASSWORD")
 upload_dir = getenv("UPLOAD_DIR")
+harbor_port = int_of_string(optional.get(default="8005", getenv("LIQ_HARBOR_PORT")))
 
 def make_channel(name, mountpoint) =
-  # AutoDJ: shuffle all files in uploads dir
+  # 1. Harbor Input (receives live broadcast from server.js/ffmpeg)
+  # Mounts: live/deck-a, live/deck-b, etc.
+  live = input.harbor(
+    "live/deck-#{string.case.lower(name)}",
+    port=harbor_port,
+    password=icecast_password
+  )
+
+  # 2. AutoDJ: shuffle all files in uploads dir
   autodj = playlist(
     id="autodj_#{name}",
     mode="random",
@@ -15,13 +24,15 @@ def make_channel(name, mountpoint) =
     upload_dir
   )
 
-  # Silence fallback when library is empty
-  safe = fallback(
-    id="safe_#{name}",
+  # 3. Combine with Fallback
+  # Prioritize live broadcast, then AutoDJ, then silence
+  radio = fallback(
+    id="radio_#{name}",
     track_sensitive=false,
-    [autodj, blank()]
+    [live, autodj, blank()]
   )
 
+  # 4. Output to Icecast
   output.icecast(
     %mp3(bitrate=128, stereo=true),
     id="out_#{name}",
@@ -32,7 +43,7 @@ def make_channel(name, mountpoint) =
     name="SonicBeat Deck #{name}",
     description="SonicBeat Radio - Channel #{name}",
     public=false,
-    safe
+    radio
   )
 end
 

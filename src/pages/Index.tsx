@@ -176,8 +176,8 @@ const Index = () => {
             <h1 className="text-2xl font-bold text-primary tracking-[0.3em]">{settings.station_name}</h1>
             {SERVER_MODE && (
               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${server.serverOnline
-                  ? 'border-green-500/50 bg-green-500/10 text-green-400'
-                  : 'border-red-500/50 bg-red-500/10 text-red-400'
+                ? 'border-green-500/50 bg-green-500/10 text-green-400'
+                : 'border-red-500/50 bg-red-500/10 text-red-400'
                 }`}>
                 {server.serverOnline ? '● SERVER' : '○ OFFLINE'}
               </span>
@@ -244,6 +244,8 @@ const Index = () => {
                   onServerStop={SERVER_MODE ? () => server.stop(id) : undefined}
                   onServerSkip={SERVER_MODE ? () => server.skip(id) : undefined}
                   onServerAutoDJ={SERVER_MODE ? (enabled) => server.setAutoDJ(id, enabled) : undefined}
+                  onServerStartStream={SERVER_MODE ? () => server.startStream(id) : undefined}
+                  onServerStopStream={SERVER_MODE ? () => server.stopStream(id) : undefined}
                   // Browser mode props
                   browserState={!SERVER_MODE ? engine.decks[id] : undefined}
                   analyser={!SERVER_MODE ? engine.getAnalyser(id) : undefined}

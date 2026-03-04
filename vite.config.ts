@@ -11,25 +11,21 @@ export default defineConfig(({ mode }) => ({
     },
     historyApiFallback: true,
     proxy: {
+      // Proxy all /api calls to the backend
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
       // Proxy WebSocket connections to streaming server
       '/ws': {
-        target: 'ws://localhost:3001',
+        target: 'ws://127.0.0.1:3001',
         ws: true,
         changeOrigin: true,
       },
       // Proxy HLS streams to streaming server
       '/hls': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
-      // Proxy status endpoint to streaming server
-      '/status': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
-      // Proxy deck-info endpoint to streaming server
-      '/deck-info': {
-        target: 'http://localhost:3001',
+        target: 'http://127.0.0.1:3001',
         changeOrigin: true,
       },
     },

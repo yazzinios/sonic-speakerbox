@@ -118,7 +118,7 @@ function liqCmd(command) {
     let response = '';
     client.setTimeout(3000);
     client.connect(LIQ_TELNET_PORT, LIQ_HOST, () => {
-      client.write(command + '\n');
+      client.write(command + '\nexit\n');
     });
     client.on('data', d => { response += d.toString(); });
     client.on('close', () => resolve(response.trim()));
@@ -166,7 +166,7 @@ function startLiveBroadcast(deck, ws) {
     `icecast://source:${SOURCE_PASSWORD}@${LIQ_HOST}:${LIQ_HARBOR_PORT}/live/deck-${deck.toLowerCase()}`,
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
-  ffmpeg.stdout.on('data', () => {});
+  ffmpeg.stdout.on('data', () => { });
   ffmpeg.stderr.on('data', d => {
     const msg = d.toString();
     if (msg.includes('error') && !msg.includes('deprecated')) {
@@ -191,8 +191,8 @@ function startLiveBroadcast(deck, ws) {
 function stopLiveBroadcast(deck) {
   const s = state[deck];
   if (s.liveProcess) {
-    try { s.liveProcess.stdin.end(); } catch (_) {}
-    try { s.liveProcess.kill('SIGTERM'); } catch (_) {}
+    try { s.liveProcess.stdin.end(); } catch (_) { }
+    try { s.liveProcess.kill('SIGTERM'); } catch (_) { }
     s.liveProcess = null;
     s.liveActive = false;
   }
@@ -207,7 +207,7 @@ wss.on('connection', (ws, req) => {
   if (!deck || !DECKS.includes(deck) || type !== 'broadcast') { ws.close(); return; }
 
   const s = state[deck];
-  if (s.socket && s.socket !== ws) { try { s.socket.close(); } catch (_) {} }
+  if (s.socket && s.socket !== ws) { try { s.socket.close(); } catch (_) { } }
   s.socket = ws;
 
   let ffmpegProc = null;
@@ -227,14 +227,14 @@ wss.on('connection', (ws, req) => {
 
       // Write buffered chunks
       if (ffmpegProc?.stdin.writable) {
-        pendingChunks.forEach(c => { try { ffmpegProc.stdin.write(c); } catch (_) {} });
+        pendingChunks.forEach(c => { try { ffmpegProc.stdin.write(c); } catch (_) { } });
         pendingChunks = [];
       }
       return;
     }
 
     if (ffmpegProc?.stdin.writable) {
-      try { ffmpegProc.stdin.write(chunk); } catch (_) {}
+      try { ffmpegProc.stdin.write(chunk); } catch (_) { }
     }
   });
 
@@ -365,6 +365,23 @@ app.post('/deck/:deck/autodj', (req, res) => {
   res.json({ ok: true, autoDJEnabled: s.autoDJEnabled });
 });
 
+// ─── Stream Control ───────────────────────────────────────────────────────────
+app.post('/deck/:deck/stream/start', (req, res) => {
+  const deck = req.params.deck?.toUpperCase();
+  if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
+  liqCmd(`out_${deck}.start`).then(() => {
+    res.json({ ok: true, streaming: true });
+  });
+});
+
+app.post('/deck/:deck/stream/stop', (req, res) => {
+  const deck = req.params.deck?.toUpperCase();
+  if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
+  liqCmd(`out_${deck}.stop`).then(() => {
+    res.json({ ok: true, streaming: false });
+  });
+});
+
 // ─── Playlist endpoints ───────────────────────────────────────────────────────
 app.post('/deck/:deck/playlist', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
@@ -465,24 +482,41 @@ app.get('/status', async (req, res) => {
   res.json({ live });
 });
 
-app.get('/deck-info', async (req, res) => {
-  const info = {};
-  for (const deck of DECKS) {
-    const s = state[deck];
-    let currentTrackName = s.trackName || null;
+// ─── Background Liquidsoap Polling ────────────────────────────────────────────
+// Instead of hammering Liquidsoap with 8 telnet connections every 2s for deck-info,
+// we poll it in the background every 3s and cache the results.
+const liqCache = {};
+DECKS.forEach(d => liqCache[d] = { trackName: null, streaming: false });
 
-    // Ask Liquidsoap what's currently playing
+setInterval(async () => {
+  for (const deck of DECKS) {
     try {
       const metadata = await liqCmd(`autodj_${deck}.last_metadata`);
       const titleMatch = metadata.match(/title="([^"]+)"/);
       const fileMatch = metadata.match(/filename="([^"]+)"/);
-      if (titleMatch) currentTrackName = titleMatch[1];
-      else if (fileMatch) currentTrackName = path.basename(fileMatch[1]);
-    } catch (_) {}
+      if (titleMatch) liqCache[deck].trackName = titleMatch[1];
+      else if (fileMatch) liqCache[deck].trackName = path.basename(fileMatch[1]);
+    } catch (_) { }
+
+    try {
+      const started = await liqCmd(`out_${deck}.is_started`);
+      liqCache[deck].streaming = started.includes('true');
+    } catch (_) { }
+  }
+}, 3000);
+
+app.get('/deck-info', async (req, res) => {
+  const info = {};
+  for (const deck of DECKS) {
+    const s = state[deck];
+    const cached = liqCache[deck] || { trackName: null, streaming: false };
+
+    // For file/playlist mode, we know the track name from state. For autodj, use Liquidsoap's reported name.
+    const currentTrackName = s.mode === 'autodj' ? cached.trackName : (s.trackName || null);
 
     info[deck] = {
       djConnected: !!(s.socket?.readyState === 1),
-      streaming: true, // Icecast/Liquidsoap always streaming
+      streaming: cached.streaming,
       mode: s.liveActive ? 'live' : (s.mode || 'autodj'),
       trackName: currentTrackName,
       trackPath: s.trackPath,

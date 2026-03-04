@@ -85,7 +85,8 @@ export function useServerDeck() {
         C: { ...EMPTY_DECK, ...data.C, streamUrl: getDeckStreamUrl('C') },
         D: { ...EMPTY_DECK, ...data.D, streamUrl: getDeckStreamUrl('D') },
       });
-    } catch {
+    } catch (err) {
+      console.error('[ServerDeck] Polling failed:', err);
       setServerOnline(false);
     }
   }, []);
@@ -159,6 +160,28 @@ export function useServerDeck() {
     }
   }, [fetchStatus]);
 
+  const startStream = useCallback(async (deck: DeckId) => {
+    try {
+      await apiPost(`/deck/${deck}/stream/start`);
+      toast.success(`Deck ${deck} stream STARTED`);
+      fetchStatus();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
+    }
+  }, [fetchStatus]);
+
+  const stopStream = useCallback(async (deck: DeckId) => {
+    try {
+      await apiPost(`/deck/${deck}/stream/stop`);
+      toast.success(`Deck ${deck} stream STOPPED`);
+      fetchStatus();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      toast.error(`Deck ${deck}: ${message}`);
+    }
+  }, [fetchStatus]);
+
   const loadPlaylist = useCallback(async (
     deck: DeckId,
     tracks: Array<{ id: string; serverName: string; name: string }>,
@@ -198,6 +221,8 @@ export function useServerDeck() {
     stop,
     skip,
     setAutoDJ,
+    startStream,
+    stopStream,
     loadPlaylist,
     playlistNext,
     playlistJump,

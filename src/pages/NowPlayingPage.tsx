@@ -151,7 +151,7 @@ export default function NowPlayingPage() {
           color: '#f0e6d0',
           margin: 0,
         }}>
-          Sonic Speakerbox
+          COCOSTATION
         </h1>
         <p style={{
           fontFamily: "'Courier New', monospace",
@@ -185,7 +185,7 @@ export default function NowPlayingPage() {
       }}>
         <Music2 size={12} color="#222" />
         <span style={{ fontFamily: "'Courier New', monospace", fontSize: 10, color: '#222', letterSpacing: 2 }}>
-          SONIC SPEAKERBOX · LIVE RADIO
+          COCOSTATION · LIVE RADIO
         </span>
       </div>
     </div>

@@ -5,12 +5,12 @@ icecast_host = getenv("ICECAST_HOST")
 icecast_port = int_of_string(getenv("ICECAST_PORT"))
 icecast_password = getenv("ICECAST_SOURCE_PASSWORD")
 upload_dir = getenv("UPLOAD_DIR")
-harbor_port = int_of_string(optional.get(default="8005", getenv("LIQ_HARBOR_PORT")))
+harbor_port = 8005
 
 def make_channel(name, mountpoint) =
   # 1. Harbor Input: Only for Microphone injection now
   mic = input.harbor(
-    "mic/deck-#{string.case.lower(name)}",
+    "/mic/deck-#{string.case.lower(name)}",
     port=harbor_port,
     password=icecast_password
   )

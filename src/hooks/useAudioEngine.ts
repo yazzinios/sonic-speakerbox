@@ -390,6 +390,10 @@ export function useAudioEngine() {
     return deckStreamDestsRef.current[deck]?.stream || null;
   }, [getCtx]);
 
+  const getMicStream = useCallback((): MediaStream | null => {
+    return micStreamRef.current || null;
+  }, []);
+
   const duckStart = useCallback(() => setMicDuck(0.15), []);
   const duckEnd = useCallback(() => setMicDuck(1), []);
 
@@ -398,7 +402,7 @@ export function useAudioEngine() {
     loadTrack, play, pause, stop, setVolume,
     setEQ, setSpeed, setLoopStart, setLoopEnd, toggleLoop, clearLoop,
     setYoutubeUrl, youtubePlay, youtubeStop, setCustomJingle, playAnnouncement,
-    startMic, stopMic, getAnalyser, getOutputStream, getDeckOutputStream,
+    startMic, stopMic, getAnalyser, getOutputStream, getDeckOutputStream, getMicStream,
     duckStart, duckEnd,
     // Mic duck settings
     micDuckLevel, setMicDuckLevel,

@@ -126,7 +126,8 @@ export function useHLSBroadcast() {
   }, []);
 
   const startHosting = useCallback((
-    getDeckStream: (deck: DeckId) => MediaStream | null,
+    getStreamFn: (deck: DeckId) => MediaStream | null,
+    targetDecks: DeckId[] = [...ALL_DECKS] // Allow partial targeting
   ) => {
     // If already hosting in this session, stop first to cleanly restart
     if (Object.keys(broadcastsRef.current).length > 0) {
@@ -146,8 +147,8 @@ export function useHLSBroadcast() {
     let startedDecks = 0;
     const errors: string[] = [];
 
-    ALL_DECKS.forEach((deckId) => {
-      const stream = getDeckStream(deckId);
+    targetDecks.forEach((deckId) => {
+      const stream = getStreamFn(deckId);
 
       if (!stream) {
         console.warn(`[${deckId}] No audio stream available`);
@@ -155,11 +156,10 @@ export function useHLSBroadcast() {
         return;
       }
 
-      // Check the stream has audio tracks (it always should from getDeckOutputStream)
+      // Check the stream has audio tracks
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
         console.warn(`[${deckId}] Stream has no audio tracks — deck will broadcast silence`);
-        // We still broadcast — silence is valid and the stream is ready
       }
 
       const broadcast: DeckBroadcast = {

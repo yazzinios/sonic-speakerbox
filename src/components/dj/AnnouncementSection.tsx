@@ -7,7 +7,8 @@ import { Megaphone, Upload, Play, Trash2, Clock, Plus, Volume2, Users, Loader2 }
 import type { DeckId } from '@/types/channels';
 import { ALL_DECKS, DECK_COLORS, getChannels } from '@/types/channels';
 import { useAnnouncements, type AnnTarget, type AnnCategory } from '@/hooks/useAnnouncements';
-import { STREAMING_SERVER } from '@/lib/streamingServer';
+import { STREAMING_SERVER, SERVER_MODE } from '@/lib/streamingServer';
+import { toast } from 'sonner';
 
 interface AnnouncementSectionProps {
   onPlayAnnouncement: (file: File, duck?: boolean) => Promise<void>;
@@ -86,20 +87,38 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
   }, [voices, onDuckStart, onDuckEnd]);
 
   const playAnn = useCallback(async (ann: typeof announcements[0]) => {
-    if (ann.contentType === 'audio' && ann.audioServerName) {
-      // Fetch from server and play
-      try {
-        const url = `${STREAMING_SERVER}/announcements/audio/${encodeURIComponent(ann.audioServerName)}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('File not found on server');
-        const blob = await res.blob();
-        const file = new File([blob], ann.audioServerName, { type: blob.type || 'audio/mpeg' });
-        await onPlayAnnouncement(file, true);
-      } catch (err) {
-        console.error('[Announcement] Play failed:', err);
+    if (SERVER_MODE) {
+      if (ann.contentType === 'audio' && ann.audioServerName) {
+        try {
+          await fetch(`${STREAMING_SERVER}/announcements/play`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serverName: ann.audioServerName, targets: ann.target === 'all' ? ALL_DECKS : [ann.target] })
+          });
+          toast.success(`Announcement sent to ${ann.target === 'all' ? 'all decks' : ann.target}`);
+        } catch (err) {
+          console.error('[Announcement] Server play failed:', err);
+          toast.error('Failed to trigger announcement on server');
+        }
+      } else {
+        toast.error('Text-to-Speech announcements are not supported in Server Mode yet.');
       }
-    } else if (ann.contentType === 'tts' && ann.ttsText.trim()) {
-      speakText(ann.ttsText, ann.voiceName, true);
+    } else {
+      // Browser mode original playback
+      if (ann.contentType === 'audio' && ann.audioServerName) {
+        try {
+          const url = `${STREAMING_SERVER}/announcements/audio/${encodeURIComponent(ann.audioServerName)}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('File not found on server');
+          const blob = await res.blob();
+          const file = new File([blob], ann.audioServerName, { type: blob.type || 'audio/mpeg' });
+          await onPlayAnnouncement(file, true);
+        } catch (err) {
+          console.error('[Announcement] Play failed:', err);
+        }
+      } else if (ann.contentType === 'tts' && ann.ttsText.trim()) {
+        speakText(ann.ttsText, ann.voiceName, true);
+      }
     }
     markPlayed(ann.id);
   }, [onPlayAnnouncement, speakText, markPlayed]);

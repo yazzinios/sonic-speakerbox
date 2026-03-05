@@ -128,9 +128,20 @@ const Index = () => {
   };
 
   // ── Mic ───────────────────────────────────────────────────────────────────
-  const handleStartMic = () => {
+  const handleStartMic = async () => {
     const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
-    engine.startMic(targets);
+    await engine.startMic(targets);
+    if (SERVER_MODE) {
+      // Stream just the raw microphone directly to the mic harbors on targeted decks
+      startHosting(engine.getMicStream, targets);
+    }
+  };
+
+  const handleStopMic = () => {
+    engine.stopMic();
+    if (SERVER_MODE) {
+      stopHosting();
+    }
   };
 
   // ── Clipboard helpers ─────────────────────────────────────────────────────
@@ -321,7 +332,7 @@ const Index = () => {
               jinglePlaying={engine.jinglePlaying}
               micTarget={micTarget}
               onStartMic={handleStartMic}
-              onStopMic={engine.stopMic}
+              onStopMic={handleStopMic}
               onMicTargetChange={setMicTarget}
             />
 

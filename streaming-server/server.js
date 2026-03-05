@@ -147,7 +147,7 @@ function startLiveBroadcast(deck, ws) {
   stopLiveBroadcast(deck);
 
   const mountUser = `source_${deck.toLowerCase()}`;
-  const harborUrl = `http://${LIQ_HOST}:${LIQ_HARBOR_PORT}/live/deck-${deck.toLowerCase()}`;
+  const harborUrl = `http://${LIQ_HOST}:${LIQ_HARBOR_PORT}/mic/deck-${deck.toLowerCase()}`;
 
   console.log(`[${deck}] Starting live broadcast → ${harborUrl}`);
 
@@ -163,7 +163,7 @@ function startLiveBroadcast(deck, ws) {
     '-ac', '2',
     '-ar', '44100',
     '-f', 'mp3',
-    `icecast://source:${SOURCE_PASSWORD}@${LIQ_HOST}:${LIQ_HARBOR_PORT}/live/deck-${deck.toLowerCase()}`,
+    `icecast://source:${SOURCE_PASSWORD}@${LIQ_HOST}:${LIQ_HARBOR_PORT}/mic/deck-${deck.toLowerCase()}`,
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
   ffmpeg.stdout.on('data', () => { });
@@ -284,7 +284,6 @@ app.delete('/library/files/:name', (req, res) => {
 });
 
 // ─── Deck control ─────────────────────────────────────────────────────────────
-// Load a specific track — tell Liquidsoap to queue it as a single-track playlist
 app.post('/deck/:deck/load', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
@@ -300,9 +299,11 @@ app.post('/deck/:deck/load', (req, res) => {
   s.mode = 'file';
   s.autoDJActive = false;
 
-  // Tell Liquidsoap to push this track next via request.push
-  liqCmd(`autodj_${deck}.push ${fp}`).then(() => {
-    liqCmd(`autodj_${deck}.skip`);
+  // Unmute music and push to dedicated track queue
+  liqCmd(`amp_music_${deck}.volume 1`).then(() => {
+    // We flush the queue first (if possible, though typically we just skip)
+    // and push the new track.
+    liqCmd(`q_${deck}.push ${fp}`);
   });
 
   saveState();
@@ -318,32 +319,24 @@ app.post('/deck/:deck/stop', (req, res) => {
   s.trackPath = null; s.trackName = null;
   s.mode = 'autodj'; s.autoDJActive = true;
   saveState();
-  liqCmd(`autodj_${deck}.skip`);
+  // Unmute to allow autodj to play, skip explicit queue
+  liqCmd(`amp_music_${deck}.volume 1`).then(() => liqCmd(`q_${deck}.skip`));
   res.json({ ok: true });
 });
 
-// Play = skip to current queued track (or resume AutoDJ)
+// Play = unmute the music amplifier
 app.post('/deck/:deck/play', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  const s = state[deck];
-  if (s.mode === 'file' && s.trackPath) {
-    liqCmd(`autodj_${deck}.push ${s.trackPath}`).then(() => liqCmd(`autodj_${deck}.skip`));
-  } else {
-    liqCmd(`autodj_${deck}.skip`);
-  }
-  s.autoDJActive = true;
-  saveState();
+  liqCmd(`amp_music_${deck}.volume 1`);
   res.json({ ok: true });
 });
 
-// Pause = skip to blank silence (Liquidsoap fallback will play silence)
-// True pause is not possible with Icecast streaming — we skip to next/stop
+// Pause = mute the music amplifier
 app.post('/deck/:deck/pause', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  // Skip current track — Liquidsoap will fall back to silence or autodj
-  liqCmd(`autodj_${deck}.skip`);
+  liqCmd(`amp_music_${deck}.volume 0`);
   res.json({ ok: true });
 });
 
@@ -351,7 +344,12 @@ app.post('/deck/:deck/pause', (req, res) => {
 app.post('/deck/:deck/skip', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  liqCmd(`autodj_${deck}.skip`);
+  const s = state[deck];
+  if (s.mode === 'autodj') {
+    liqCmd(`autodj_${deck}.skip`);
+  } else {
+    liqCmd(`q_${deck}.skip`);
+  }
   res.json({ ok: true });
 });
 
@@ -415,18 +413,19 @@ function playPlaylistFromIndex(deck, index) {
   const s = state[deck];
   if (!s.playlist.length) return;
 
-  // Clear queue then push tracks from index onwards
-  liqCmd(`autodj_${deck}.skip`).then(async () => {
-    const tracks = s.playlist.slice(index);
-    for (const track of tracks) {
-      await liqCmd(`autodj_${deck}.push ${track.path}`);
-    }
-    if (s.playlistLoop) {
-      // Push from beginning again
-      for (const track of s.playlist.slice(0, index)) {
-        await liqCmd(`autodj_${deck}.push ${track.path}`);
+  // Unmute music path
+  liqCmd(`amp_music_${deck}.volume 1`).then(async () => {
+    liqCmd(`q_${deck}.skip`).then(async () => {
+      const tracks = s.playlist.slice(index);
+      for (const track of tracks) {
+        await liqCmd(`q_${deck}.push ${track.path}`);
       }
-    }
+      if (s.playlistLoop) {
+        for (const track of s.playlist.slice(0, index)) {
+          await liqCmd(`q_${deck}.push ${track.path}`);
+        }
+      }
+    });
   });
 }
 
@@ -466,6 +465,23 @@ app.delete('/announcements/files/:name', (req, res) => {
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
   try { fs.unlinkSync(fp); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/announcements/play', (req, res) => {
+  const { serverName, targets } = req.body;
+  if (!serverName) return res.status(400).json({ error: 'serverName required' });
+  const fp = path.join(ANN_DIR, serverName);
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
+
+  const targetDecks = Array.isArray(targets) ? targets : DECKS;
+  targetDecks.forEach(deck => {
+    const d = deck.toUpperCase();
+    if (DECKS.includes(d)) {
+      liqCmd(`ann_${d}.push ${fp}`);
+    }
+  });
+
+  res.json({ ok: true });
 });
 
 // ─── Health / status / deck-info ─────────────────────────────────────────────

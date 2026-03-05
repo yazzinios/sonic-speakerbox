@@ -201,11 +201,18 @@ export function Deck({
         /* Server mode controls */
         <div className="space-y-1.5">
           <div className="flex items-center gap-1">
-            {/* Play */}
-            <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerPlay}
-              title="Play / Resume">
-              <Play className="h-3 w-3" />
-            </Button>
+            {/* Play/Pause */}
+            {isPlaying ? (
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerPause}
+                title="Pause">
+                <Pause className="h-3 w-3" />
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerPlay}
+                title="Play / Resume">
+                <Play className="h-3 w-3" />
+              </Button>
+            )}
             {/* Stop */}
             <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerStop}
               title="Stop (returns to AutoDJ)">

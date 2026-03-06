@@ -81,14 +81,16 @@ export function useAnnouncements() {
     voiceName: string;
     scheduledTime: string;
     target: AnnTarget;
+    audioServerName?: string; // optional override — used by server-side TTS
   }) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { toast.error('Not logged in'); return null; }
 
     const { name, category, file, ttsText, voiceName, scheduledTime, target } = opts;
 
-    let audioServerName: string | null = null;
-    const contentType: 'audio' | 'tts' = file ? 'audio' : 'tts';
+    // Pre-generated server name (e.g. from /announcements/tts) takes priority
+    let audioServerName: string | null = opts.audioServerName ?? null;
+    const contentType: 'audio' | 'tts' = (file || audioServerName) ? 'audio' : 'tts';
 
     // Upload audio file to server if provided
     if (file) {

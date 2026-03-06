@@ -132,15 +132,32 @@ const Index = () => {
     const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
     await engine.startMic(targets);
     if (SERVER_MODE) {
-      // Stream just the raw microphone directly to the mic harbors on targeted decks
+      // Tell server to duck music on target decks to 15%
+      try {
+        await fetch(`${STREAMING_SERVER}/mic/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targets: micTarget === 'all' ? ['ALL'] : targets }),
+        });
+      } catch (e) { console.warn('[Mic] /mic/start failed:', e); }
+      // Stream raw mic audio to selected harbor paths
       startHosting(engine.getMicStream, targets);
     }
   };
 
-  const handleStopMic = () => {
+  const handleStopMic = async () => {
     engine.stopMic();
     if (SERVER_MODE) {
       stopHosting();
+      // Restore music on previously ducked decks
+      const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
+      try {
+        await fetch(`${STREAMING_SERVER}/mic/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targets: micTarget === 'all' ? ['ALL'] : targets }),
+        });
+      } catch (e) { console.warn('[Mic] /mic/stop failed:', e); }
     }
   };
 

@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Megaphone, Upload, Play, Trash2, Clock, Plus, Volume2, Users, Loader2 } from 'lucide-react';
+import { Megaphone, Upload, Play, Trash2, Clock, Plus, Volume2, Users, Loader2, CalendarClock, VolumeX } from 'lucide-react';
 import type { DeckId } from '@/types/channels';
 import { ALL_DECKS, DECK_COLORS, getChannels } from '@/types/channels';
 import { useAnnouncements, type AnnTarget, type AnnCategory } from '@/hooks/useAnnouncements';
@@ -32,17 +32,19 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
   // Form state
   const [newName, setNewName] = useState('');
   const [newText, setNewText] = useState('');
-  const [newSchedule, setNewSchedule] = useState('');
+  const [newSchedule, setNewSchedule] = useState(''); // ISO datetime for server mode, HH:mm for browser mode
   const [newFile, setNewFile] = useState<File | null>(null);
   const [newVoice, setNewVoice] = useState('');
   const [newTarget, setNewTarget] = useState<AnnTarget>('all');
   const [newCategory, setNewCategory] = useState<AnnCategory>('promo');
+  const [newDuck, setNewDuck] = useState(true);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const channels = getChannels();
 
   useEffect(() => {
+    if (SERVER_MODE) return; // use espeak server-side, no browser voices needed
     const loadVoices = () => {
       const available = window.speechSynthesis?.getVoices() || [];
       setVoices(available);
@@ -54,26 +56,58 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+
   const maleVoices = voices.filter(v => /male|david|james|daniel|google uk english male/i.test(v.name) && !/female/i.test(v.name));
   const femaleVoices = voices.filter(v => /female|zira|samantha|karen|google uk english female/i.test(v.name));
   const otherVoices = voices.filter(v => !maleVoices.includes(v) && !femaleVoices.includes(v));
 
+  const targetDecksArray = newTarget === 'all' ? ALL_DECKS : [newTarget as DeckId];
+
   const handleAdd = useCallback(async () => {
     if (!newName.trim() && !newFile && !newText.trim()) return;
     setSaving(true);
-    await addAnnouncement({
-      name: newName || newFile?.name || 'TTS Announcement',
-      category: newCategory,
-      file: newFile,
-      ttsText: newText,
-      voiceName: newVoice,
-      scheduledTime: newSchedule,
-      target: newTarget,
-    });
+
+    // In SERVER_MODE with TTS text + no file: generate audio server-side first
+    if (SERVER_MODE && newText.trim() && !newFile) {
+      try {
+        const ttsRes = await fetch(`${STREAMING_SERVER}/announcements/tts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: newText, voice: 'en' }),
+        });
+        const ttsData = await ttsRes.json();
+        if (!ttsRes.ok) throw new Error(ttsData.error || 'TTS failed');
+
+        // Save as an audio announcement with the generated server file
+        await addAnnouncement({
+          name: newName || 'TTS Announcement',
+          category: newCategory,
+          file: null,
+          ttsText: newText,
+          voiceName: 'espeak-en',
+          scheduledTime: newSchedule,
+          target: newTarget,
+          audioServerName: ttsData.serverName, // pre-generated MP3
+        });
+      } catch (err) {
+        console.error('[TTS] Server generation failed:', err);
+        toast.error('TTS generation failed on server');
+      }
+    } else {
+      await addAnnouncement({
+        name: newName || newFile?.name || 'TTS Announcement',
+        category: newCategory,
+        file: newFile,
+        ttsText: newText,
+        voiceName: newVoice,
+        scheduledTime: newSchedule,
+        target: newTarget,
+      });
+    }
     setSaving(false);
     setNewName(''); setNewText(''); setNewSchedule(''); setNewFile(null);
     setShowAdd(false);
-  }, [newName, newFile, newText, newSchedule, newVoice, newTarget, newCategory, addAnnouncement, setShowAdd]);
+  }, [newName, newFile, newText, newSchedule, newVoice, newTarget, newCategory, addAnnouncement]);
 
   const speakText = useCallback((text: string, voiceName?: string, duck: boolean = false) => {
     if (!text.trim() || !('speechSynthesis' in window)) return;
@@ -86,25 +120,51 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
     window.speechSynthesis.speak(utterance);
   }, [voices, onDuckStart, onDuckEnd]);
 
-  const playAnn = useCallback(async (ann: typeof announcements[0]) => {
+
+  const playAnn = useCallback(async (ann: typeof announcements[0], duckMusic = true) => {
     if (SERVER_MODE) {
       if (ann.contentType === 'audio' && ann.audioServerName) {
-        try {
-          await fetch(`${STREAMING_SERVER}/announcements/play`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ serverName: ann.audioServerName, targets: ann.target === 'all' ? ALL_DECKS : [ann.target] })
-          });
-          toast.success(`Announcement sent to ${ann.target === 'all' ? 'all decks' : ann.target}`);
-        } catch (err) {
-          console.error('[Announcement] Server play failed:', err);
-          toast.error('Failed to trigger announcement on server');
+        const targets = ann.target === 'all' ? ALL_DECKS : [ann.target];
+
+        // If this announcement has a future scheduled time, use the schedule endpoint
+        if (ann.scheduledTime && new Date(ann.scheduledTime) > new Date()) {
+          try {
+            const r = await fetch(`${STREAMING_SERVER}/announcements/schedule`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                serverName: ann.audioServerName,
+                targets,
+                playAt: new Date(ann.scheduledTime).toISOString(),
+                duckMusic,
+              }),
+            });
+            const d = await r.json();
+            toast.success(`Scheduled for ${new Date(ann.scheduledTime).toLocaleTimeString()} → ${targets.join(', ')}`);
+            console.log('[Schedule] result:', d);
+          } catch (err) {
+            console.error('[Announcement] Schedule failed:', err);
+            toast.error('Failed to schedule announcement');
+          }
+        } else {
+          // Play immediately
+          try {
+            await fetch(`${STREAMING_SERVER}/announcements/play`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ serverName: ann.audioServerName, targets, duckMusic }),
+            });
+            toast.success(`▶ Playing on ${ann.target === 'all' ? 'all decks' : ann.target} ${duckMusic ? '(music ducked)' : ''}`);
+          } catch (err) {
+            console.error('[Announcement] Server play failed:', err);
+            toast.error('Failed to trigger announcement on server');
+          }
         }
       } else {
-        toast.error('Text-to-Speech announcements are not supported in Server Mode yet.');
+        toast.error('No audio file — TTS is being generated server-side, please wait.');
       }
     } else {
-      // Browser mode original playback
+      // Browser mode
       if (ann.contentType === 'audio' && ann.audioServerName) {
         try {
           const url = `${STREAMING_SERVER}/announcements/audio/${encodeURIComponent(ann.audioServerName)}`;
@@ -112,16 +172,15 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
           if (!res.ok) throw new Error('File not found on server');
           const blob = await res.blob();
           const file = new File([blob], ann.audioServerName, { type: blob.type || 'audio/mpeg' });
-          await onPlayAnnouncement(file, true);
-        } catch (err) {
-          console.error('[Announcement] Play failed:', err);
-        }
+          await onPlayAnnouncement(file, duckMusic);
+        } catch (err) { console.error('[Announcement] Play failed:', err); }
       } else if (ann.contentType === 'tts' && ann.ttsText.trim()) {
-        speakText(ann.ttsText, ann.voiceName, true);
+        speakText(ann.ttsText, ann.voiceName, duckMusic);
       }
     }
     markPlayed(ann.id);
   }, [onPlayAnnouncement, speakText, markPlayed]);
+
 
   // Auto-play scheduled announcements
   useEffect(() => {
@@ -210,10 +269,23 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
             </Button>
           )}
 
+          {/* Schedule */}
           <div>
-            <label className="text-[10px] text-muted-foreground font-bold uppercase">Schedule (optional)</label>
-            <Input type="time" value={newSchedule} onChange={e => setNewSchedule(e.target.value)} className="h-8 text-xs" />
+            <label className="text-[10px] text-muted-foreground font-bold uppercase">
+              {SERVER_MODE ? 'Schedule (date & time, optional)' : 'Schedule (HH:mm, optional)'}
+            </label>
+            {SERVER_MODE
+              ? <Input type="datetime-local" value={newSchedule} onChange={e => setNewSchedule(e.target.value)} className="h-8 text-xs" />
+              : <Input type="time" value={newSchedule} onChange={e => setNewSchedule(e.target.value)} className="h-8 text-xs" />
+            }
           </div>
+
+          {/* Duck toggle */}
+          <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground">
+            <input type="checkbox" checked={newDuck} onChange={e => setNewDuck(e.target.checked)} className="h-3 w-3" />
+            <VolumeX className="h-3 w-3" />
+            Duck music to 5% during playback
+          </label>
 
           <div className="flex gap-2 items-center">
             <input ref={fileRef} type="file" accept="audio/*" className="hidden" onChange={e => setNewFile(e.target.files?.[0] || null)} />
@@ -254,9 +326,10 @@ export function AnnouncementSection({ onPlayAnnouncement, onDuckStart, onDuckEnd
             </div>
             <Button
               size="sm" variant="ghost"
-              onClick={() => playAnn(ann)}
+              onClick={() => playAnn(ann, true)}
               disabled={ann.contentType === 'audio' && !ann.audioServerName}
               className="h-6 w-6 p-0"
+              title="Play (with music duck)"
             >
               <Play className="h-3 w-3" />
             </Button>

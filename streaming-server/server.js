@@ -16,9 +16,11 @@ const WebSocket = require('ws');
 const cors = require('cors');
 const multer = require('multer');
 const net = require('net');
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -452,6 +454,35 @@ app.post('/deck/:deck/playlist/jump', (req, res) => {
   res.json({ ok: true, newIndex: index });
 });
 
+// ─── Ducking helpers ──────────────────────────────────────────────────────────
+async function duckDecks(decks, volume) {
+  for (const d of decks) {
+    await liqCmd(`amp_music_${d}.volume ${volume}`);
+  }
+}
+
+async function restoreDecks(decks) {
+  await duckDecks(decks, 1);
+}
+
+// Duration estimator: returns ms length of an audio file using ffprobe
+function getAudioDuration(filePath) {
+  return new Promise((resolve) => {
+    const ff = spawn('ffprobe', [
+      '-v', 'quiet', '-print_format', 'json', '-show_format', filePath
+    ]);
+    let out = '';
+    ff.stdout.on('data', d => out += d);
+    ff.on('close', () => {
+      try {
+        const data = JSON.parse(out);
+        resolve(parseFloat(data.format.duration || 5) * 1000);
+      } catch { resolve(5000); }
+    });
+    ff.on('error', () => resolve(5000));
+  });
+}
+
 // ─── Announcements ────────────────────────────────────────────────────────────
 app.post('/announcements/upload', uploadAnn.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
@@ -467,22 +498,159 @@ app.delete('/announcements/files/:name', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/announcements/play', (req, res) => {
-  const { serverName, targets } = req.body;
+// POST /announcements/tts  { text, voice? }
+// Generates an MP3 via espeak, saves to ANN_DIR, returns serverName
+app.post('/announcements/tts', async (req, res) => {
+  const { text, voice } = req.body;
+  if (!text) return res.status(400).json({ error: 'text required' });
+
+  const safeName = `tts_${Date.now()}.mp3`;
+  const outPath = path.join(ANN_DIR, safeName);
+
+  // espeak text → wav pipe → ffmpeg → mp3
+  const espeakArgs = ['-v', voice || 'en', '--stdout', text];
+  const espeak = spawn('espeak', espeakArgs);
+  const ffmpeg = spawn('ffmpeg', [
+    '-f', 'wav', '-i', 'pipe:0',
+    '-c:a', 'libmp3lame', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+    '-y', outPath
+  ]);
+
+  espeak.stdout.pipe(ffmpeg.stdin);
+  espeak.stderr.on('data', () => { });
+
+  ffmpeg.on('close', (code) => {
+    if (code === 0) res.json({ ok: true, serverName: safeName });
+    else {
+      console.error('[TTS] ffmpeg exited', code);
+      res.status(500).json({ error: 'TTS generation failed' });
+    }
+  });
+  ffmpeg.on('error', (e) => {
+    console.error('[TTS] error:', e.message);
+    res.status(500).json({ error: e.message });
+  });
+});
+
+// Scheduled announcements store: { id, serverName, targets, scheduledAt (ISO), cronJob }
+const scheduledAnns = new Map();
+
+// POST /announcements/play  { serverName, targets, duckMusic? }
+// Plays immediately with optional music ducking
+app.post('/announcements/play', async (req, res) => {
+  const { serverName, targets, duckMusic = true } = req.body;
   if (!serverName) return res.status(400).json({ error: 'serverName required' });
   const fp = path.join(ANN_DIR, serverName);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
 
-  const targetDecks = Array.isArray(targets) ? targets : DECKS;
-  targetDecks.forEach(deck => {
-    const d = deck.toUpperCase();
-    if (DECKS.includes(d)) {
-      liqCmd(`ann_${d}.push ${fp}`);
-    }
-  });
+  const targetDecks = (Array.isArray(targets) && targets.length > 0)
+    ? targets.map(d => d.toUpperCase()).filter(d => DECKS.includes(d))
+    : [...DECKS];
 
+  res.json({ ok: true, targetDecks });
+
+  // Duck music on targeted decks (fade to 5%)
+  if (duckMusic) await duckDecks(targetDecks, 0.05);
+
+  // Push announcement into each targeted deck queue
+  for (const d of targetDecks) {
+    await liqCmd(`ann_${d}.push ${fp}`);
+  }
+
+  // Restore music after announcement duration + 500ms buffer
+  if (duckMusic) {
+    const durationMs = await getAudioDuration(fp);
+    setTimeout(() => restoreDecks(targetDecks), durationMs + 500);
+  }
+});
+
+// POST /announcements/schedule  { serverName, targets, playAt (ISO 8601), duckMusic? }
+app.post('/announcements/schedule', (req, res) => {
+  const { serverName, targets, playAt, duckMusic = true } = req.body;
+  if (!serverName || !playAt) return res.status(400).json({ error: 'serverName and playAt required' });
+
+  const fp = path.join(ANN_DIR, serverName);
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
+
+  const fireAt = new Date(playAt);
+  if (isNaN(fireAt.getTime()) || fireAt <= Date.now()) {
+    return res.status(400).json({ error: 'playAt must be a future ISO 8601 datetime' });
+  }
+
+  const id = `sched_${Date.now()}`;
+  const delay = fireAt.getTime() - Date.now();
+
+  const targetDecks = (Array.isArray(targets) && targets.length > 0)
+    ? targets.map(d => d.toUpperCase()).filter(d => DECKS.includes(d))
+    : [...DECKS];
+
+  const timer = setTimeout(async () => {
+    console.log(`[Schedule] Firing announcement ${serverName} → ${targetDecks.join(',')}`);
+    if (duckMusic) await duckDecks(targetDecks, 0.05);
+    for (const d of targetDecks) { await liqCmd(`ann_${d}.push ${fp}`); }
+    if (duckMusic) {
+      const durationMs = await getAudioDuration(fp);
+      setTimeout(() => restoreDecks(targetDecks), durationMs + 500);
+    }
+    scheduledAnns.delete(id);
+  }, delay);
+
+  scheduledAnns.set(id, { id, serverName, targets: targetDecks, playAt: fireAt.toISOString(), timer });
+  res.json({ ok: true, id, fireAt: fireAt.toISOString(), delayMs: delay });
+});
+
+// GET /announcements/scheduled   — list pending
+app.get('/announcements/scheduled', (req, res) => {
+  const list = [];
+  scheduledAnns.forEach(({ id, serverName, targets, playAt }) => {
+    list.push({ id, serverName, targets, playAt });
+  });
+  res.json(list);
+});
+
+// DELETE /announcements/scheduled/:id  — cancel
+app.delete('/announcements/scheduled/:id', (req, res) => {
+  const item = scheduledAnns.get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  clearTimeout(item.timer);
+  scheduledAnns.delete(req.params.id);
   res.json({ ok: true });
 });
+
+// ─── Mic Start / Stop (per-deck, with music ducking) ─────────────────────────
+// Track active mic sessions: deck → { ffmpegProc, targets }
+const micSessions = new Map();
+
+// POST /mic/start  { targets: ['A','B',...] or ['ALL'] }
+// Starts ffmpeg pushing the browser WebM mic stream to the selected harbor paths
+// Also ducks music on those decks to 15%
+app.post('/mic/start', async (req, res) => {
+  const { targets } = req.body;
+  const targetDecks = (Array.isArray(targets) && targets[0] === 'ALL')
+    ? [...DECKS]
+    : (Array.isArray(targets) ? targets.map(d => d.toUpperCase()).filter(d => DECKS.includes(d)) : [...DECKS]);
+
+  if (targetDecks.length === 0) return res.status(400).json({ error: 'No valid target decks' });
+
+  // Duck music on all target decks
+  await duckDecks(targetDecks, 0.15);
+
+  // Return target list so the frontend WebSocket knows where to connect
+  res.json({ ok: true, targetDecks });
+});
+
+// POST /mic/stop  { targets: ['A','B',...] }
+// Restores music volume on those decks
+app.post('/mic/stop', async (req, res) => {
+  const { targets } = req.body;
+  const targetDecks = (Array.isArray(targets) && targets[0] === 'ALL')
+    ? [...DECKS]
+    : (Array.isArray(targets) ? targets.map(d => d.toUpperCase()).filter(d => DECKS.includes(d)) : [...DECKS]);
+
+  await restoreDecks(targetDecks);
+  res.json({ ok: true });
+});
+
 
 // ─── Health / status / deck-info ─────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true }));

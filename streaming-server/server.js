@@ -302,7 +302,7 @@ app.post('/deck/:deck/load', (req, res) => {
   s.autoDJActive = false;
 
   // Unmute music and push to dedicated track queue
-  liqCmd(`amp_music_${deck}.volume 1`).then(() => {
+  liqCmd(`amp_music_${deck}.set 1.`).then(() => {
     // We flush the queue first (if possible, though typically we just skip)
     // and push the new track.
     liqCmd(`q_${deck}.push ${fp}`);
@@ -322,7 +322,7 @@ app.post('/deck/:deck/stop', (req, res) => {
   s.mode = 'autodj'; s.autoDJActive = true;
   saveState();
   // Unmute to allow autodj to play, skip explicit queue
-  liqCmd(`amp_music_${deck}.volume 1`).then(() => liqCmd(`q_${deck}.skip`));
+  liqCmd(`amp_music_${deck}.set 1.`).then(() => liqCmd(`q_${deck}.skip`));
   res.json({ ok: true });
 });
 
@@ -330,7 +330,7 @@ app.post('/deck/:deck/stop', (req, res) => {
 app.post('/deck/:deck/play', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  liqCmd(`amp_music_${deck}.volume 1`);
+  liqCmd(`amp_music_${deck}.set 1.`);
   res.json({ ok: true });
 });
 
@@ -338,7 +338,7 @@ app.post('/deck/:deck/play', (req, res) => {
 app.post('/deck/:deck/pause', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  liqCmd(`amp_music_${deck}.volume 0`);
+  liqCmd(`amp_music_${deck}.set 0.`);
   res.json({ ok: true });
 });
 
@@ -416,7 +416,7 @@ function playPlaylistFromIndex(deck, index) {
   if (!s.playlist.length) return;
 
   // Unmute music path
-  liqCmd(`amp_music_${deck}.volume 1`).then(async () => {
+  liqCmd(`amp_music_${deck}.set 1.`).then(async () => {
     liqCmd(`q_${deck}.skip`).then(async () => {
       const tracks = s.playlist.slice(index);
       for (const track of tracks) {
@@ -457,7 +457,7 @@ app.post('/deck/:deck/playlist/jump', (req, res) => {
 // ─── Ducking helpers ──────────────────────────────────────────────────────────
 async function duckDecks(decks, volume) {
   for (const d of decks) {
-    await liqCmd(`amp_music_${d}.volume ${volume}`);
+    await liqCmd(`amp_music_${d}.set ${volume}`);
   }
 }
 
@@ -659,8 +659,8 @@ app.get('/status', async (req, res) => {
   const live = {};
   for (const deck of DECKS) {
     try {
-      const result = await liqCmd(`out_${deck}.is_started`);
-      live[deck] = result.includes('true');
+      const result = await liqCmd(`out_${deck}.status`);
+      live[deck] = result.includes('on');
     } catch { live[deck] = false; }
   }
   res.json({ live });
@@ -683,8 +683,8 @@ setInterval(async () => {
     } catch (_) { }
 
     try {
-      const started = await liqCmd(`out_${deck}.is_started`);
-      liqCache[deck].streaming = started.includes('true');
+      const status = await liqCmd(`out_${deck}.status`);
+      liqCache[deck].streaming = status.includes('on');
     } catch (_) { }
   }
 }, 3000);

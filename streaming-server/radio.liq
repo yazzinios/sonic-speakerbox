@@ -13,7 +13,7 @@ harbor_port = 8005
 def make_channel(name, mountpoint) =
   # 1. Harbor Input: Microphone injection only
   mic = input.harbor(
-    "/mic/deck-#{string.lowercase(name)}",
+    "/mic/deck-#{string.case.lower(name)}",
     port=harbor_port,
     password=icecast_password
   )

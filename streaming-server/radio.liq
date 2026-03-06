@@ -1,16 +1,19 @@
 # SonicBeat Radio - Liquidsoap 2.x compatible
-%include "settings.liq"
+%include "/app/settings.liq"
 
+# Read env vars with safe defaults to prevent fatal errors
 icecast_host = getenv("ICECAST_HOST")
-icecast_port = int_of_string(getenv("ICECAST_PORT"))
+icecast_port_str = getenv("ICECAST_PORT")
+icecast_port = if icecast_port_str == "" then 8000 else int_of_string(icecast_port_str) end
 icecast_password = getenv("ICECAST_SOURCE_PASSWORD")
-upload_dir = getenv("UPLOAD_DIR")
+upload_dir_env = getenv("UPLOAD_DIR")
+upload_dir = if upload_dir_env == "" then "/data/uploads" else upload_dir_env end
 harbor_port = 8005
 
 def make_channel(name, mountpoint) =
-  # 1. Harbor Input: Only for Microphone injection now
+  # 1. Harbor Input: Microphone injection only
   mic = input.harbor(
-    "/mic/deck-#{string.case.lower(name)}",
+    "/mic/deck-#{string.lowercase(name)}",
     port=harbor_port,
     password=icecast_password
   )
@@ -29,17 +32,14 @@ def make_channel(name, mountpoint) =
     upload_dir
   )
 
-  # 5. Main Music Path: prioritize Track Queue -> AutoDJ
-  #    We wrap it in an amplifier so Node.js can mute/unmute it (Play/Pause)
+  # 5. Music Path: Track Queue -> AutoDJ -> silence
   music_base = fallback(track_sensitive=false, [track_q, autodj, blank()])
   music_amp = amplify(id="amp_music_#{name}", 1., music_base)
 
   # 6. Final Mix
-  #    We add the microphone and announcements over the music.
-  #    Liquidsoap handles overlapping automatically (it just sums the audio).
   radio = add([music_amp, announcements, mic])
 
-  # 7. Output to Icecast
+  # 7. Output to Icecast — restart on connection error
   output.icecast(
     %mp3(bitrate=128, stereo=true),
     id="out_#{name}",
@@ -50,6 +50,7 @@ def make_channel(name, mountpoint) =
     name="SonicBeat Deck #{name}",
     description="SonicBeat Radio - Channel #{name}",
     public=false,
+    on_error=fun(_) -> 5.,
     radio
   )
 end

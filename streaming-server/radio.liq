@@ -1,56 +1,66 @@
-# SonicBeat Radio - Liquidsoap 2.x compatible
-%include "/app/settings.liq"
+# ============================================================
+# SonicBeat Radio — Liquidsoap 2.1.x (Debian Bookworm)
+# ============================================================
 
-# Read env vars with safe defaults to prevent fatal errors
-icecast_host = getenv("ICECAST_HOST")
+# ── Telnet control server (port 1234) ────────────────────────────────────────
+set("server.telnet", true)
+set("server.telnet.bind_addr", "0.0.0.0")
+set("server.telnet.port", 1234)
+set("log.stdout", true)
+set("log.level", 3)
+
+# ── Read environment variables ───────────────────────────────────────────────
+icecast_host     = getenv("ICECAST_HOST")
 icecast_port_str = getenv("ICECAST_PORT")
-icecast_port = if icecast_port_str == "" then 8000 else int_of_string(icecast_port_str) end
+icecast_port     = if icecast_port_str == "" then 8000 else int_of_string(icecast_port_str) end
 icecast_password = getenv("ICECAST_SOURCE_PASSWORD")
-upload_dir_env = getenv("UPLOAD_DIR")
-upload_dir = if upload_dir_env == "" then "/data/uploads" else upload_dir_env end
-harbor_port = 8005
+upload_dir_env   = getenv("UPLOAD_DIR")
+upload_dir       = if upload_dir_env == "" then "/data/uploads" else upload_dir_env end
+harbor_port      = 8005
 
+# ── Channel factory ──────────────────────────────────────────────────────────
 def make_channel(name, mountpoint) =
-  # 1. Harbor Input: Microphone injection only
+
+  # 1. Harbor input — mic / live DJ injection
   mic = input.harbor(
-    "/mic/deck-#{string.case.lower(name)}",
-    port=harbor_port,
-    password=icecast_password
+    "/mic/deck-#{string.lowercase(name)}",
+    port    = harbor_port,
+    password = icecast_password
   )
 
-  # 2. Announcement Queue
+  # 2. Announcement queue (push files via telnet: ann_A.push /path)
   announcements = request.queue(id="ann_#{name}")
 
-  # 3. Dedicated Track Queue (for explicit Loads)
+  # 3. Explicit track queue (push single track: q_A.push /path)
   track_q = request.queue(id="q_#{name}")
 
-  # 4. AutoDJ: shuffle all files in uploads dir
+  # 4. AutoDJ — shuffle uploads dir
   autodj = playlist(
-    id="autodj_#{name}",
-    mode="random",
-    reload=30,
+    id     = "autodj_#{name}",
+    mode   = "random",
+    reload = 30,
     upload_dir
   )
 
-  # 5. Music Path: Track Queue -> AutoDJ -> silence
+  # 5. Music path: explicit queue → autodj → silence
   music_base = fallback(track_sensitive=false, [track_q, autodj, blank()])
-  music_amp = amplify(id="amp_music_#{name}", 1., music_base)
+  music_amp  = amplify(id="amp_music_#{name}", 1., music_base)
 
-  # 6. Final Mix
+  # 6. Final mix: music + announcements + mic
   radio = add([music_amp, announcements, mic])
 
-  # 7. Output to Icecast — restart on connection error
+  # 7. Output to Icecast
   output.icecast(
     %mp3(bitrate=128, stereo=true),
-    id="out_#{name}",
-    host=icecast_host,
-    port=icecast_port,
-    password=icecast_password,
-    mount=mountpoint,
-    name="SonicBeat Deck #{name}",
-    description="SonicBeat Radio - Channel #{name}",
-    public=false,
-    on_error=fun(_) -> 5.,
+    id          = "out_#{name}",
+    host        = icecast_host,
+    port        = icecast_port,
+    password    = icecast_password,
+    mount       = mountpoint,
+    name        = "SonicBeat Deck #{name}",
+    description = "SonicBeat Radio — Channel #{name}",
+    public      = false,
+    on_error    = fun(_) -> 5.,
     radio
   )
 end

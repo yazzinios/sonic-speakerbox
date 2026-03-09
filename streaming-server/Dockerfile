@@ -6,7 +6,6 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     icecast2 \
     liquidsoap \
@@ -16,11 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     curl \
     gettext-base \
+    espeak \
     && rm -rf /var/lib/apt/lists/*
 
-# Create icecast user/group so icecast2 doesn't refuse to start
-RUN addgroup --system icecast2 || true && \
-    adduser --system --ingroup icecast2 --no-create-home icecast2 || true
+# Print Liquidsoap version at build time for debugging
+RUN liquidsoap --version || true
+
+# Icecast system user
+RUN addgroup --system icecast2 2>/dev/null || true && \
+    adduser --system --ingroup icecast2 --no-create-home icecast2 2>/dev/null || true
 
 WORKDIR /app
 

@@ -99,20 +99,36 @@ const annStorage = multer.diskStorage({
 const uploadAnn = multer({ storage: annStorage, limits: { fileSize: 50 * 1024 * 1024 } });
 
 // ─── Liquidsoap telnet ────────────────────────────────────────────────────────
-function liqCmd(command) {
-  return new Promise((resolve) => {
-    const client = new net.Socket();
-    let response = '';
-    client.setTimeout(4000);
-    client.connect(LIQ_TELNET, LIQ_HOST, () => {
-      client.write(command + '\r\nexit\r\n');
+class LiqQueue {
+  constructor() { this.q = []; this.busy = false; }
+  exec(command) {
+    return new Promise(resolve => {
+      this.q.push({ command, resolve });
+      this.next();
     });
-    client.on('data',    d => { response += d.toString(); });
-    client.on('close',   () => resolve(response.trim()));
-    client.on('error',   e  => { console.warn('[Liquidsoap] Telnet error:', e.message); resolve(''); });
-    client.on('timeout', () => { client.destroy(); resolve(''); });
-  });
+  }
+  next() {
+    if (this.busy || !this.q.length) return;
+    this.busy = true;
+    const { command, resolve } = this.q.shift();
+    const client = new require('net').Socket();
+    let response = '';
+    client.setTimeout(3000);
+    const done = (res) => {
+      client.destroy();
+      resolve(res);
+      this.busy = false;
+      setTimeout(() => this.next(), 20);
+    };
+    client.on('error', e => done(''));
+    client.on('timeout', () => done(''));
+    client.connect(LIQ_TELNET, LIQ_HOST, () => client.write(command + '\r\nexit\r\n'));
+    client.on('data', d => response += d.toString());
+    client.on('close', () => done(response.trim()));
+  }
 }
+const liqDispatcher = new LiqQueue();
+function liqCmd(command) { return liqDispatcher.exec(command); }
 
 // ─── Live broadcast (browser WebM → ffmpeg → Liquidsoap harbor) ─────────────
 function startLiveBroadcast(deck) {
@@ -247,7 +263,7 @@ app.post('/deck/:deck/load', async (req, res) => {
   saveState();
 
   // Unmute + queue the track
-  await liqCmd(`amp_music_${deck}.set 1.`);
+  await liqCmd(`var.set vol_${deck} = 1.`);
   await liqCmd(`q_${deck}.push ${fp}`);
   res.json({ ok: true, deck, serverName });
 });
@@ -255,14 +271,14 @@ app.post('/deck/:deck/load', async (req, res) => {
 app.post('/deck/:deck/play', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  liqCmd(`amp_music_${deck}.set 1.`);
+  liqCmd(`var.set vol_${deck} = 1.`);
   res.json({ ok: true });
 });
 
 app.post('/deck/:deck/pause', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  liqCmd(`amp_music_${deck}.set 0.`);
+  liqCmd(`var.set vol_${deck} = 0.`);
   res.json({ ok: true });
 });
 
@@ -275,7 +291,7 @@ app.post('/deck/:deck/stop', async (req, res) => {
   s.trackPath = null; s.trackName = null;
   s.mode = 'autodj'; s.autoDJActive = true;
   saveState();
-  await liqCmd(`amp_music_${deck}.set 1.`);
+  await liqCmd(`var.set vol_${deck} = 1.`);
   await liqCmd(`q_${deck}.skip`);
   res.json({ ok: true });
 });
@@ -334,7 +350,7 @@ app.post('/deck/:deck/playlist', async (req, res) => {
 async function playPlaylistFromIndex(deck, index) {
   const s = state[deck];
   if (!s.playlist.length) return;
-  await liqCmd(`amp_music_${deck}.set 1.`);
+  await liqCmd(`var.set vol_${deck} = 1.`);
   await liqCmd(`q_${deck}.skip`);
   for (const track of s.playlist.slice(index)) await liqCmd(`q_${deck}.push ${track.path}`);
   if (s.playlistLoop) for (const track of s.playlist.slice(0, index)) await liqCmd(`q_${deck}.push ${track.path}`);
@@ -364,7 +380,7 @@ app.post('/deck/:deck/playlist/jump', async (req, res) => {
 
 // ─── Ducking helpers ──────────────────────────────────────────────────────────
 async function duckDecks(decks, volume) {
-  for (const d of decks) await liqCmd(`amp_music_${d}.set ${volume}`);
+  for (const d of decks) await liqCmd(`var.set vol_${d} = ${volume}`);
 }
 async function restoreDecks(decks) { await duckDecks(decks, 1); }
 

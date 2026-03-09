@@ -5,23 +5,42 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all required dependencies
+# ── 1. Base system deps (no liquidsoap from apt — not in bookworm) ────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     icecast2 \
-    liquidsoap \
-    liquidsoap-plugin-lame \
     ffmpeg \
     supervisor \
-    nodejs \
-    npm \
     curl \
+    wget \
+    gnupg \
     gettext-base \
     espeak \
-    wget \
     procps \
+    libev4 \
+    libmp3lame0 \
+    libopus0 \
+    libvorbis0a \
+    libvorbisenc2 \
+    libavcodec60 \
+    libavformat60 \
+    libswresample4 \
     && rm -rf /var/lib/apt/lists/*
 
-# Icecast system user
+# ── 2. Node.js 20 LTS via NodeSource ─────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── 3. Liquidsoap 2.2.5 — official .deb from Savonet releases ────────────────
+RUN ARCH=$(dpkg --print-architecture) \
+    && wget -q "https://github.com/savonet/liquidsoap/releases/download/v2.2.5/liquidsoap_2.2.5-debian-bookworm-1_${ARCH}.deb" \
+         -O /tmp/liquidsoap.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends /tmp/liquidsoap.deb \
+    && rm /tmp/liquidsoap.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── 4. Icecast system user ────────────────────────────────────────────────────
 RUN addgroup --system icecast2 2>/dev/null || true && \
     adduser --system --ingroup icecast2 --no-create-home icecast2 2>/dev/null || true
 
@@ -36,7 +55,7 @@ COPY settings.liq .
 COPY icecast.xml.template .
 COPY supervisord.conf /etc/supervisor/conf.d/sonicbeat.conf
 
-# Ensure dirs exist and set permissions
+# ── 5. Runtime directories and permissions ────────────────────────────────────
 RUN mkdir -p /data/uploads /data/announcements /tmp/hls \
     && mkdir -p /var/log/supervisor \
     && mkdir -p /var/log/icecast2 \

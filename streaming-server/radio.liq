@@ -14,12 +14,12 @@ set("server.telnet.bind_addr", "0.0.0.0")
 set("server.telnet.port", 1234)
 
 # ── Environment Variables ────────────────────────────────────────────────────
-icecast_host     = getenv("ICECAST_HOST")
-icecast_port_str = getenv("ICECAST_PORT")
-icecast_port     = if icecast_port_str == "" then 8000 else int_of_string(icecast_port_str) end
-icecast_password = getenv("ICECAST_SOURCE_PASSWORD")
-upload_dir_env   = getenv("UPLOAD_DIR")
-upload_dir       = if upload_dir_env == "" then "/data/uploads" else upload_dir_env end
+icecast_host     = environment.get(default="127.0.0.1", "ICECAST_HOST")
+icecast_port_str = environment.get(default="8000", "ICECAST_PORT")
+icecast_port     = int_of_string(icecast_port_str)
+icecast_password = environment.get(default="sonicbeat_source_2024", "ICECAST_SOURCE_PASSWORD")
+upload_dir_env   = environment.get(default="/data/uploads", "UPLOAD_DIR")
+upload_dir       = upload_dir_env
 harbor_port      = 8005
 
 # ── Dynamic channel constructor ──────────────────────────────────────────────

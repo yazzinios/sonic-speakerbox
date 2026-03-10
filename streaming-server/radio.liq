@@ -69,8 +69,6 @@ def make_channel(name, mountpoint) =
     description   = "SonicBeat Radio — Deck #{name}",
     public        = false,
     fallible      = true,
-    restart       = true,
-    restart_delay = 3,
     radio
   )
 end

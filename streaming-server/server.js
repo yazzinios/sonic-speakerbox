@@ -53,7 +53,8 @@ function saveState() {
       const s = state[d];
       out[d] = { mode: s.mode, trackPath: s.trackPath, trackName: s.trackName,
                  looping: s.looping, playlist: s.playlist, playlistIndex: s.playlistIndex,
-                 playlistLoop: s.playlistLoop, autoDJEnabled: s.autoDJEnabled };
+                 playlistLoop: s.playlistLoop, autoDJEnabled: s.autoDJEnabled,
+                 streaming: s.streaming };
     });
     fs.writeFileSync(STATE_FILE, JSON.stringify(out, null, 2));
   } catch (e) { console.warn('[State] save error:', e.message); }
@@ -73,6 +74,7 @@ DECKS.forEach(d => {
     playlistLoop:  s.playlistLoop  || false,
     autoDJEnabled: s.autoDJEnabled !== undefined ? s.autoDJEnabled : true,
     autoDJActive:  false,
+    streaming:     s.streaming  !== undefined ? s.streaming : true,
     socket:        null,
     liveProcess:   null,
     liveActive:    false,
@@ -258,27 +260,33 @@ app.post('/deck/:deck/load', async (req, res) => {
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
 
   const s = state[deck];
+  // Only store the pending track — do NOT push to Liquidsoap queue yet
+  // The user must click Play to start it
   s.trackPath = fp; s.trackName = serverName; s.looping = loop || false;
   s.mode = 'file'; s.autoDJActive = false;
   saveState();
-
-  // Unmute + queue the track
-  await liqCmd(`var.set vol_${deck} = 1.`);
-  await liqCmd(`q_${deck}.push ${fp}`);
   res.json({ ok: true, deck, serverName });
 });
 
-app.post('/deck/:deck/play', (req, res) => {
+app.post('/deck/:deck/play', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  liqCmd(`var.set vol_${deck} = 1.`);
+  const s = state[deck];
+  // Unmute the deck
+  await liqCmd(`var.set vol_${deck} = 1.`);
+  // If there's a loaded track pending, push it to Liquidsoap queue now
+  if (s.trackPath && s.mode === 'file') {
+    await liqCmd(`q_${deck}.skip`);  // clear any existing queue
+    await liqCmd(`q_${deck}.push ${s.trackPath}`);
+  }
   res.json({ ok: true });
 });
 
-app.post('/deck/:deck/pause', (req, res) => {
+app.post('/deck/:deck/pause', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  liqCmd(`var.set vol_${deck} = 0.`);
+  // Set volume to 0 to silence (Liquidsoap 2.2 has no pause for queues)
+  await liqCmd(`var.set vol_${deck} = 0.`);
   res.json({ ok: true });
 });
 
@@ -289,10 +297,11 @@ app.post('/deck/:deck/stop', async (req, res) => {
   stopLiveBroadcast(deck);
   s.playlist = []; s.playlistIndex = 0;
   s.trackPath = null; s.trackName = null;
-  s.mode = 'autodj'; s.autoDJActive = true;
+  s.mode = null; s.autoDJActive = false;
   saveState();
-  await liqCmd(`var.set vol_${deck} = 1.`);
+  // Skip the current item and restore volume
   await liqCmd(`q_${deck}.skip`);
+  await liqCmd(`var.set vol_${deck} = 1.`);
   res.json({ ok: true });
 });
 
@@ -312,11 +321,13 @@ app.post('/deck/:deck/autodj', (req, res) => {
   res.json({ ok: true, autoDJEnabled: state[deck].autoDJEnabled });
 });
 
-// Stream start/stop (Liquidsoap 2.1.x uses output.start / output.stop)
+// Stream start/stop — tracked in Node state for reliability
 app.post('/deck/:deck/stream/start', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  await liqCmd(`out_${deck}.start`);
+  const r = await liqCmd(`out_${deck}.start`);
+  state[deck].streaming = true;
+  saveState();
   res.json({ ok: true, streaming: true });
 });
 
@@ -324,6 +335,8 @@ app.post('/deck/:deck/stream/stop', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   await liqCmd(`out_${deck}.stop`);
+  state[deck].streaming = false;
+  saveState();
   res.json({ ok: true, streaming: false });
 });
 
@@ -510,9 +523,9 @@ app.get('/status', async (req, res) => {
   res.json({ live });
 });
 
-// ─── Background poller ────────────────────────────────────────────────────────
+// ─── Background poller (metadata only, no streaming status check) ────────────
 const liqCache = {};
-DECKS.forEach(d => liqCache[d] = { trackName: null, streaming: false });
+DECKS.forEach(d => liqCache[d] = { trackName: null });
 
 setInterval(async () => {
   for (const deck of DECKS) {
@@ -523,11 +536,6 @@ setInterval(async () => {
       if (titleMatch)     liqCache[deck].trackName = titleMatch[1];
       else if (fileMatch) liqCache[deck].trackName = path.basename(fileMatch[1]);
     } catch (_) {}
-
-    try {
-      const r = await liqCmd(`out_${deck}.status`);
-      liqCache[deck].streaming = r.includes('on');
-    } catch (_) {}
   }
 }, 3000);
 
@@ -537,21 +545,24 @@ app.get('/deck-info', (req, res) => {
   for (const deck of DECKS) {
     const s      = state[deck];
     const cached = liqCache[deck];
+    // Streaming is true if: Liquidsoap output is active (since output.icecast with fallible=true
+    // connects automatically when Liquidsoap starts, so it's streaming by default)
+    const isStreaming = s.streaming !== undefined ? s.streaming : true;
     info[deck] = {
-      djConnected:   !!(s.socket?.readyState === 1),
-      streaming:     cached.streaming,
-      mode:          s.liveActive ? 'live' : (s.mode || 'autodj'),
-      trackName:     s.mode === 'autodj' ? cached.trackName : (s.trackName || null),
-      trackPath:     s.trackPath,
-      looping:       s.looping,
+      djConnected:    !!(s.socket?.readyState === 1),
+      streaming:      isStreaming,
+      mode:           s.liveActive ? 'live' : (s.mode || null),
+      trackName:      s.mode === 'autodj' ? cached.trackName : (s.trackName || null),
+      trackPath:      s.trackPath,
+      looping:        s.looping,
       playlistLength: s.playlist.length,
-      playlistIndex: s.playlistIndex,
-      playlistLoop:  s.playlistLoop,
-      currentTrack:  s.mode === 'playlist' ? (s.playlist[s.playlistIndex] || null) : null,
-      playlist:      s.playlist,
-      autoDJEnabled: s.autoDJEnabled,
-      autoDJActive:  !s.liveActive,
-      streamUrl:     `http://${req.hostname}:8000/deck-${deck.toLowerCase()}`,
+      playlistIndex:  s.playlistIndex,
+      playlistLoop:   s.playlistLoop,
+      currentTrack:   s.mode === 'playlist' ? (s.playlist[s.playlistIndex] || null) : null,
+      playlist:       s.playlist,
+      autoDJEnabled:  s.autoDJEnabled,
+      autoDJActive:   !s.liveActive,
+      streamUrl:      `http://${req.hostname}:8000/deck-${deck.toLowerCase()}`,
     };
   }
   res.json(info);

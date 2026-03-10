@@ -142,10 +142,29 @@ export function Deck({
 
   const copyStreamUrl = () => {
     const url = getDeckStreamUrl(id);
-    navigator.clipboard.writeText(url).then(
-      () => toast.success(`Stream URL copied — paste into VLC`),
-      () => toast.info(`VLC URL: ${url}`)
-    );
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function' && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(
+          () => toast.success(`Stream URL copied — paste into VLC`),
+          () => toast.error(`Failed to copy to clipboard`)
+        );
+      } else {
+        throw new Error('Clipboard API unavailable');
+      }
+    } catch (e) {
+      // Fallback
+      try {
+        const el = document.createElement('textarea');
+        el.value = url; el.style.position = 'fixed'; el.style.opacity = '0';
+        document.body.appendChild(el); el.focus(); el.select();
+        const successful = document.execCommand('copy');
+        document.body.removeChild(el);
+        if (successful) toast.success(`URL copied via fallback — paste into VLC`);
+        else throw new Error('execCommand failed');
+      } catch (err) {
+        toast.info(`Manually copy: ${url}`);
+      }
+    }
   };
 
   return (
@@ -203,26 +222,35 @@ export function Deck({
           <div className="flex items-center gap-1">
             {/* Play/Pause */}
             {isPlaying ? (
-              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerPause}
-                title="Pause">
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
+                if (onServerPause) onServerPause();
+                else toast.error('Pause not available');
+              }} title="Pause">
                 <Pause className="h-3 w-3" />
               </Button>
             ) : (
-              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerPlay}
-                title="Play / Resume">
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
+                if (onServerPlay) onServerPlay();
+                else toast.error('Play not available');
+              }} title="Play / Resume">
                 <Play className="h-3 w-3" />
               </Button>
             )}
             {/* Stop */}
-            <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerStop}
-              title="Stop (returns to AutoDJ)">
+            <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
+                if (onServerStop) onServerStop();
+                else toast.error('Stop not available');
+            }} title="Stop (returns to AutoDJ)">
               <Square className="h-3 w-3" />
             </Button>
             {/* Skip */}
-            <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={onServerSkip}
-              title="Skip to next track">
+            <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
+                if (onServerSkip) onServerSkip();
+                else toast.error('Skip not available');
+            }} title="Skip to next track">
               <SkipForward className="h-3 w-3" />
             </Button>
+
             {/* AutoDJ toggle */}
             <Button
               size="sm"
@@ -250,6 +278,7 @@ export function Deck({
               title="Copy VLC stream URL">
               <Copy className="h-3 w-3" />
             </Button>
+
             {/* Expand (for EQ etc. — still useful for server mode visual) */}
             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setShowControls(!showControls)}>
               {showControls ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}

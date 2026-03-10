@@ -35,6 +35,7 @@ serve(async (req) => {
       throw new Error(`YouTube API error [${ytRes.status}]: ${JSON.stringify(data)}`);
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const results = (data.items || []).map((item: any) => ({
       videoId: item.id.videoId,
       title: item.snippet.title,

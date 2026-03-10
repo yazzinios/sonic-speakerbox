@@ -70,7 +70,6 @@ const Index = () => {
       const blob = await fileRes.blob();
       const file = new File([blob], track.name, { type: blob.type || 'audio/mpeg' });
       engine.loadTrack(deck, file);
-      engine.play(deck);
       await fetch(`${STREAMING_SERVER}/deck/${deck}/load`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -171,17 +170,30 @@ const Index = () => {
 
   // ── Clipboard helpers ─────────────────────────────────────────────────────
   const copyToClipboard = (text: string, msg: string) => {
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(() => toast.success(msg)).catch(() => fallbackCopy(text, msg));
-    } else fallbackCopy(text, msg);
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function' && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => toast.success(msg)).catch(() => fallbackCopy(text, msg));
+      } else {
+        fallbackCopy(text, msg);
+      }
+    } catch (e) {
+      console.warn('[Clipboard] Native API failed, using fallback:', e);
+      fallbackCopy(text, msg);
+    }
   };
   const fallbackCopy = (text: string, msg: string) => {
-    const el = document.createElement('textarea');
-    el.value = text; el.style.position = 'fixed'; el.style.opacity = '0';
-    document.body.appendChild(el); el.focus(); el.select();
-    try { document.execCommand('copy'); toast.success(msg); }
-    catch { toast.error('Copy failed — paste manually: ' + text); }
-    document.body.removeChild(el);
+    try {
+      const el = document.createElement('textarea');
+      el.value = text; el.style.position = 'fixed'; el.style.opacity = '0';
+      document.body.appendChild(el); el.focus(); el.select();
+      const successful = document.execCommand('copy');
+      document.body.removeChild(el);
+      if (successful) toast.success(msg);
+      else throw new Error('execCommand failed');
+    } catch (err) {
+      console.warn('[Clipboard] Fallback failed:', err);
+      toast.info('Please copy manually: ' + text);
+    }
   };
   const copyListenLink = (code: string) =>
     copyToClipboard(`${window.location.origin}/listen?code=${code}`, 'Listen link copied!');

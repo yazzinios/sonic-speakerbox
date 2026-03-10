@@ -142,6 +142,7 @@ describe('Volume clamping', () => {
 
 // ─── Playlist queue logic ─────────────────────────────────────────────────
 describe('Playlist skip logic', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const skipTrack = (playlist: any[]) => {
     if (!playlist.length) return playlist;
     const [, ...rest] = playlist;

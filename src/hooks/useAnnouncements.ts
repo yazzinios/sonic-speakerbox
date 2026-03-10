@@ -47,6 +47,7 @@ export function useAnnouncements() {
         if (error) throw error;
         if (cancelled || !data) return;
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const loaded: Announcement[] = (data || []).map((row: any) => ({
           id: row.id,
           name: row.title,

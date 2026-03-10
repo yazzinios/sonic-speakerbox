@@ -202,14 +202,18 @@ export function useServerDeck() {
     try {
       await apiPost(`/deck/${deck}/playlist/next`);
       fetchStatus();
-    } catch { }
+    } catch (e) {
+      console.warn('Playlist next failed', e);
+    }
   }, [fetchStatus]);
 
   const playlistJump = useCallback(async (deck: DeckId, index: number) => {
     try {
       await apiPost(`/deck/${deck}/playlist/jump`, { index });
       fetchStatus();
-    } catch { }
+    } catch (e) {
+      console.warn('Playlist jump failed', e);
+    }
   }, [fetchStatus]);
 
   return {

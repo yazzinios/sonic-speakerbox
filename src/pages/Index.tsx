@@ -130,35 +130,43 @@ const Index = () => {
   // ── Mic ───────────────────────────────────────────────────────────────────
   const handleStartMic = async () => {
     const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
-    await engine.startMic(targets);
+
     if (SERVER_MODE) {
-      // Tell server to duck music on target decks to 15%
+      // In server mode, NO browser audio, NO getUserMedia
+      engine.setMicActiveOnly(true); // just visual state
       try {
         await fetch(`${STREAMING_SERVER}/mic/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ targets: micTarget === 'all' ? ['ALL'] : targets }),
         });
+        toast.success(`Broadcasting mic to ${micTarget === 'all' ? 'All Decks' : targets.join(', ')}`);
       } catch (e) { console.warn('[Mic] /mic/start failed:', e); }
-      // Stream raw mic audio to selected harbor paths
-      startHosting(engine.getMicStream, targets);
+      return;
     }
+
+    // Browser mode
+    await engine.startMic(targets);
   };
 
   const handleStopMic = async () => {
-    engine.stopMic();
+    const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
+
     if (SERVER_MODE) {
-      stopHosting();
-      // Restore music on previously ducked decks
-      const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
+      engine.setMicActiveOnly(false); // just visual state
       try {
         await fetch(`${STREAMING_SERVER}/mic/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ targets: micTarget === 'all' ? ['ALL'] : targets }),
         });
+        toast.success('Mic stopped');
       } catch (e) { console.warn('[Mic] /mic/stop failed:', e); }
+      return;
     }
+
+    // Browser mode
+    engine.stopMic();
   };
 
   // ── Clipboard helpers ─────────────────────────────────────────────────────

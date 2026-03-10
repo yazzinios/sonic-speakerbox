@@ -36,7 +36,7 @@ services:
       LIQ_TELNET_PORT: "1234"
       LIQ_HARBOR_PORT: "8005"
     volumes:
-      - sonicbeat-uploads:/data
+      - sonicbeat-data:/data
     restart: always
     networks:
       sonicbeat-net:
@@ -52,5 +52,5 @@ networks:
           gateway: 10.10.0.1
 
 volumes:
-  sonicbeat-uploads:
-    name: sonicbeat-uploads
+  sonicbeat-data:
+    name: sonicbeat-data

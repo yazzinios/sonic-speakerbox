@@ -342,6 +342,10 @@ export function useAudioEngine() {
     setMicActive(true);
   }, [getCtx, playJingle, micDuckLevel]);
 
+  const setMicActiveOnly = useCallback((active: boolean) => {
+    setMicActive(active);
+  }, []);
+
   const stopMic = useCallback(() => {
     const ctx = ctxRef.current;
     if (!ctx) return;
@@ -402,7 +406,7 @@ export function useAudioEngine() {
     loadTrack, play, pause, stop, setVolume,
     setEQ, setSpeed, setLoopStart, setLoopEnd, toggleLoop, clearLoop,
     setYoutubeUrl, youtubePlay, youtubeStop, setCustomJingle, playAnnouncement,
-    startMic, stopMic, getAnalyser, getOutputStream, getDeckOutputStream, getMicStream,
+    startMic, stopMic, setMicActiveOnly, getAnalyser, getOutputStream, getDeckOutputStream, getMicStream,
     duckStart, duckEnd,
     // Mic duck settings
     micDuckLevel, setMicDuckLevel,

@@ -530,12 +530,16 @@ DECKS.forEach(d => liqCache[d] = { trackName: null });
 setInterval(async () => {
   for (const deck of DECKS) {
     try {
-      const meta = await liqCmd(`autodj_${deck}.last_metadata`);
+      // We now query the music mix node metadata for current track info
+      const meta = await liqCmd(`mix_node_${deck}.last_metadata`);
       const titleMatch = meta.match(/title="([^"]+)"/);
       const fileMatch  = meta.match(/filename="([^"]+)"/);
       if (titleMatch)     liqCache[deck].trackName = titleMatch[1];
       else if (fileMatch) liqCache[deck].trackName = path.basename(fileMatch[1]);
-    } catch (_) {}
+      else                liqCache[deck].trackName = null;
+    } catch (_) {
+      liqCache[deck].trackName = null;
+    }
   }
 }, 3000);
 

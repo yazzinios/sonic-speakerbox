@@ -40,23 +40,18 @@ def make_channel(name, mountpoint) =
   # 3. Explicit track queue
   track_q = request.queue(id="q_#{name}")
 
-  # 4. AutoDJ (random files from upload dir)
-  autodj = playlist(
-    id     = "autodj_#{name}",
-    mode   = "random",
-    reload = 10,
-    upload_dir
-  )
-
-  # Fallback: queue > autodj > silence
-  music_base = fallback(track_sensitive=false, [track_q, autodj, blank(id="blank_#{name}")])
+  # 4. AutoDJ is now controlled by Node.js pushing to q_#{name}
+  # We remove the automatic folder playlist to prevent tracks playing on upload.
+  
+  # Fallback: queue > silence
+  music_base = fallback(track_sensitive=false, [track_q, blank(id="blank_#{name}")])
 
   # Volume control through amplify (for ducking the music during mic/announcements)
   vol = interactive.float("vol_#{name}", 1.)
   music_amp = amplify(vol, music_base)
 
   # Final mix
-  radio = add(id="mix_#{name}", [music_amp, announcements, mic])
+  radio_mix = add(id="mix_node_#{name}", [music_amp, announcements, mic])
 
   # Output to Icecast gracefully (fallible = true ensures liquidsoap doesn't crash if icecast isn't ready)
   output.icecast(
@@ -67,10 +62,10 @@ def make_channel(name, mountpoint) =
     password      = icecast_password,
     mount         = mountpoint,
     name          = "SonicBeat Deck #{name}",
-    description   = "SonicBeat Radio — Deck #{name}",
+    description   = "SonicBeat Radio — Deck #{name} (Isolated v2.3)",
     public        = false,
     fallible      = true,
-    radio
+    radio_mix
   )
 end
 

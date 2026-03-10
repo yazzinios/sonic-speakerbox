@@ -4,6 +4,7 @@
 
 set("log.level", 3)
 set("log.stdout", true)
+set("init.allow_root", true)
 
 # IMPORTANT: Don't crash if playlist directory is initially empty or files are bad
 set("request.grace_time", 2.)

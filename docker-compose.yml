@@ -22,17 +22,16 @@ services:
       context: ./streaming-server
     container_name: radio-server
     ports:
-      - "8000:8000"   # Icecast — listeners connect here directly
-                      # URL: http://YOUR_SERVER_IP:8000/deck-a
-      # Node.js API (port 3001) is NOT exposed directly — all traffic
-      # goes through nginx on port 8083 which proxies /api/ → radio-server:3001
+      - "8000:8000"   # Icecast — VLC connects here: http://YOUR_IP:8000/deck-a
     environment:
-      ICECAST_HOST: "localhost"
+      # FIX: 127.0.0.1 — Liquidsoap and Icecast are in the SAME container
+      # Using "localhost" can fail on some Docker builds; 127.0.0.1 is explicit
+      ICECAST_HOST: "127.0.0.1"
       ICECAST_PORT: "8000"
       ICECAST_SOURCE_PASSWORD: "${ICECAST_SOURCE_PASSWORD:-sonicbeat_source_2024}"
       ICECAST_ADMIN_PASSWORD: "${ICECAST_ADMIN_PASSWORD:-sonicbeat_admin_2024}"
       UPLOAD_DIR: "${UPLOAD_DIR:-/data/uploads}"
-      LIQ_HOST: "localhost"
+      LIQ_HOST: "127.0.0.1"
       LIQ_TELNET_PORT: "1234"
       LIQ_HARBOR_PORT: "8005"
     volumes:

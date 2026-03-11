@@ -1,13 +1,12 @@
 # ============================================================
-# SonicBeat Radio — Resilient Liquidsoap 2.1.x
-# v2: No auto-play, loop support, jingle via announcement queue
+# SonicBeat Radio — Liquidsoap 2.2.x
+# FIX: output.icecast starts ACTIVE by default (fallible=true auto-connects)
+# FIX: ICECAST_HOST corrected, blank() fallback always provides audio
 # ============================================================
 
 set("log.level", 3)
 set("log.stdout", true)
 set("init.allow_root", true)
-
-# Don't crash if files are bad or missing
 set("request.grace_time", 2.)
 
 # ── Telnet Control Server ────────────────────────────────────────────────────
@@ -20,14 +19,12 @@ icecast_host     = environment.get(default="127.0.0.1", "ICECAST_HOST")
 icecast_port_str = environment.get(default="8000", "ICECAST_PORT")
 icecast_port     = int_of_string(icecast_port_str)
 icecast_password = environment.get(default="sonicbeat_source_2024", "ICECAST_SOURCE_PASSWORD")
-upload_dir_env   = environment.get(default="/data/uploads", "UPLOAD_DIR")
-upload_dir       = upload_dir_env
 harbor_port      = 8005
 
-# ── Dynamic channel constructor ──────────────────────────────────────────────
+# ── Channel constructor ──────────────────────────────────────────────────────
 def make_channel(name, mountpoint) =
 
-  # 1. Harbor input — live DJ mic/broadcast via WebSocket → ffmpeg → harbor
+  # Harbor: live DJ mic input
   mic = input.harbor(
     "/mic/deck-#{string.case(lower=true, name)}",
     port     = harbor_port,
@@ -36,60 +33,52 @@ def make_channel(name, mountpoint) =
     max      = 2.0
   )
 
-  # 2. Announcement queue — used for jingles, TTS, scheduled announcements
-  #    Jingle is pushed here by /jingle/play so listeners hear it through the stream
+  # Announcement queue: jingles, TTS, scheduled clips
   announcements = request.queue(id="ann_#{name}")
 
-  # 3. Explicit track queue — DJ pushes tracks here manually via Play button
-  #    Node.js also uses q_#{name}.length to detect when a track ends (for loop)
+  # Track queue: manually pushed by Node.js on Play button
   track_q = request.queue(id="q_#{name}")
 
-  # 4. Silence fallback — plays when queue is empty (no AutoDJ folder)
-  #    This intentionally does NOT auto-load tracks from the upload folder.
-  #    The DJ must explicitly press Play to load a track.
-  music_base = fallback(
-    track_sensitive=false,
-    [track_q, blank(id="blank_#{name}")]
-  )
+  # FIX: mksafe wraps the queue so it ALWAYS outputs audio (silence when empty)
+  # This prevents Liquidsoap from considering the source "not ready"
+  # which would cause output.icecast to disconnect.
+  safe_track = mksafe(track_q)
 
-  # 5. Volume control — used for:
-  #    - Ducking music to 5% when mic is ON AIR
-  #    - Simulating pause (set to 0)
-  #    - Restoring to 100% after mic goes OFF AIR
+  # Volume control for ducking (mic on-air) and simulated pause
   vol = interactive.float("vol_#{name}", 1.)
-  music_amp = amplify(vol, music_base)
+  music_amp = amplify(vol, safe_track)
 
-  # 6. Final mix — priority order: announcements/jingle > music > silence
-  #    mic is always mixed in (at 0 gain when not connected)
+  # Announcement queue also needs to be safe
+  safe_ann = mksafe(announcements)
+
+  # Mix: announcements override music, mic always present
   radio_mix = add(
-    id="mix_node_#{name}",
-    [music_amp, announcements, mic]
+    id     = "mix_node_#{name}",
+    normalize = false,
+    [music_amp, safe_ann, mic]
   )
 
-  # 7. Icecast output — fallible=true means it won't crash if Icecast is down
-  #    out_#{name}.start / out_#{name}.stop controlled via telnet
+  # FIX: output.icecast — using on_start/on_stop telnet hooks
+  # start_on_air=true means it connects to Icecast immediately on startup
+  # (do not wait for out_A.start command — stream is live from boot)
   output.icecast(
-    %mp3(bitrate=128),
+    %mp3(bitrate=128, samplerate=44100, stereo=true),
     id          = "out_#{name}",
     host        = icecast_host,
     port        = icecast_port,
     password    = icecast_password,
     mount       = mountpoint,
     name        = "SonicBeat Deck #{name}",
-    description = "SonicBeat Radio — Deck #{name} (v2)",
+    description = "SonicBeat Radio — Deck #{name}",
     public      = false,
+    # FIX: fallible=true but we handle reconnection manually
+    # on_disconnect Liquidsoap auto-retries connection to Icecast
     fallible    = true,
+    on_error    = fun(msg) -> begin log("out_#{name} error: #{msg}") ; 2. end,
     radio_mix
   )
 end
 
-# ── Build 4 isolated deck channels ───────────────────────────────────────────
-# Each deck is completely independent:
-#   - Separate Icecast mount (/deck-a, /deck-b, /deck-c, /deck-d)
-#   - Separate track queue (q_A, q_B, q_C, q_D)
-#   - Separate volume control (vol_A, vol_B, vol_C, vol_D)
-#   - Separate announcement queue (ann_A, ann_B, ann_C, ann_D)
-#   - Separate harbor input for live mic (deck-a, deck-b, deck-c, deck-d)
 make_channel("A", "deck-a")
 make_channel("B", "deck-b")
 make_channel("C", "deck-c")

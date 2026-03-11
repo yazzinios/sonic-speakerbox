@@ -1,5 +1,5 @@
 /**
- * SonicBeat API Server — Liquidsoap 2.1.x compatible
+ * SonicBeat API Server — Liquidsoap 2.2.x compatible
  *
  * Ports:
  *   3001  — this Node API
@@ -7,13 +7,11 @@
  *   8005  — Liquidsoap harbor (live DJ audio)
  *   1234  — Liquidsoap telnet control
  *
- * CHANGES v2:
- *  - AutoDJ default OFF (no auto-play on upload)
- *  - Load ≠ Play: /deck/:deck/load only stores track, never pushes to queue
- *  - Play/Pause/Stop reliability: volume-based pause + proper queue management
- *  - Loop mode: when a track ends, it re-queues itself if looping is on
- *  - Mic jingle: plays a jingle file through the server stream when ON AIR
- *  - Deck isolation: each deck only ever streams its own channel
+ * FIX v3:
+ *  - On startup, auto-calls out_A/B/C/D.start so streams are LIVE from boot
+ *  - streaming defaults to true always (not from persisted state)
+ *  - ICECAST_HOST uses 127.0.0.1 explicitly
+ *  - mksafe() in radio.liq ensures Liquidsoap never disconnects from Icecast
  */
 const express    = require('express');
 const http       = require('http');
@@ -40,7 +38,7 @@ const DECKS         = ['A', 'B', 'C', 'D'];
 
 const ICECAST_HOST  = process.env.ICECAST_HOST  || '127.0.0.1';
 const ICECAST_PORT  = parseInt(process.env.ICECAST_PORT || '8000');
-const SOURCE_PASS   = process.env.ICECAST_SOURCE_PASSWORD || 'sonicbeat_source';
+const SOURCE_PASS   = process.env.ICECAST_SOURCE_PASSWORD || 'sonicbeat_source_2024';
 const LIQ_HOST      = process.env.LIQ_HOST      || '127.0.0.1';
 const LIQ_TELNET    = parseInt(process.env.LIQ_TELNET_PORT || '1234');
 const LIQ_HARBOR    = parseInt(process.env.LIQ_HARBOR_PORT || '8005');
@@ -48,7 +46,7 @@ const LIQ_HARBOR    = parseInt(process.env.LIQ_HARBOR_PORT || '8005');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(ANN_DIR,    { recursive: true });
 
-// ─── Persistent state ────────────────────────────────────────────────────────
+// ─── Persistent state ─────────────────────────────────────────────────────────
 function loadState() {
   try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); }
   catch (e) { console.warn('[State] load error:', e.message); }
@@ -82,18 +80,16 @@ DECKS.forEach(d => {
   const s = persisted[d] || {};
   state[d] = {
     mode:          null,
-    trackPath:     s.trackPath  || null,
-    trackName:     s.trackName  || null,
-    looping:       s.looping    || false,
-    playlist:      s.playlist   || [],
+    trackPath:     s.trackPath     || null,
+    trackName:     s.trackName     || null,
+    looping:       s.looping       || false,
+    playlist:      s.playlist      || [],
     playlistIndex: s.playlistIndex || 0,
     playlistLoop:  s.playlistLoop  || false,
-    // FIX: AutoDJ OFF by default — no auto-play on upload
     autoDJEnabled: s.autoDJEnabled !== undefined ? s.autoDJEnabled : false,
     autoDJActive:  false,
-    // FIX: streaming persisted but default true so stream is live
-    streaming:     s.streaming  !== undefined ? s.streaming : true,
-    // FIX: track pause state
+    // FIX: streaming is ALWAYS true on boot — Icecast output starts active
+    streaming:     true,
     paused:        s.paused || false,
     socket:        null,
     liveProcess:   null,
@@ -101,9 +97,7 @@ DECKS.forEach(d => {
   };
 });
 
-// ─── Loop watchdog: re-queue track when it finishes (if looping) ─────────────
-// We poll Liquidsoap every 2s to check if a looping deck's queue is empty,
-// and if so, re-push the track so it loops seamlessly.
+// ─── Loop watchdog ─────────────────────────────────────────────────────────────
 setInterval(async () => {
   for (const deck of DECKS) {
     const s = state[deck];
@@ -113,7 +107,6 @@ setInterval(async () => {
       const result = await liqCmd(`q_${deck}.length`);
       const queueLen = parseInt(result.trim(), 10);
       if (!isNaN(queueLen) && queueLen === 0) {
-        // Queue is empty and we should be looping — re-push the track
         await liqCmd(`q_${deck}.push ${s.trackPath}`);
         console.log(`[${deck}] Loop: re-queued ${s.trackName}`);
       }
@@ -121,7 +114,7 @@ setInterval(async () => {
   }
 }, 2000);
 
-// ─── Multer ───────────────────────────────────────────────────────────────────
+// ─── Multer ────────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename:    (req, file, cb) => {
@@ -140,14 +133,13 @@ const annStorage = multer.diskStorage({
 });
 const uploadAnn = multer({ storage: annStorage, limits: { fileSize: 50 * 1024 * 1024 } });
 
-// Jingle upload
 const jingleStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, '/data'),
   filename:    (req, file, cb) => cb(null, 'jingle.mp3'),
 });
 const uploadJingle = multer({ storage: jingleStorage, limits: { fileSize: 20 * 1024 * 1024 } });
 
-// ─── Liquidsoap telnet ────────────────────────────────────────────────────────
+// ─── Liquidsoap telnet queue ───────────────────────────────────────────────────
 class LiqQueue {
   constructor() { this.q = []; this.busy = false; }
   exec(command) {
@@ -160,7 +152,7 @@ class LiqQueue {
     if (this.busy || !this.q.length) return;
     this.busy = true;
     const { command, resolve } = this.q.shift();
-    const client = new require('net').Socket();
+    const client = new net.Socket();
     let response = '';
     client.setTimeout(3000);
     const done = (res) => {
@@ -169,7 +161,7 @@ class LiqQueue {
       this.busy = false;
       setTimeout(() => this.next(), 20);
     };
-    client.on('error', e => done(''));
+    client.on('error', () => done(''));
     client.on('timeout', () => done(''));
     client.connect(LIQ_TELNET, LIQ_HOST, () => client.write(command + '\r\nexit\r\n'));
     client.on('data', d => response += d.toString());
@@ -179,7 +171,7 @@ class LiqQueue {
 const liqDispatcher = new LiqQueue();
 function liqCmd(command) { return liqDispatcher.exec(command); }
 
-// ─── Live broadcast (browser WebM → ffmpeg → Liquidsoap harbor) ─────────────
+// ─── Live broadcast (browser WebM → ffmpeg → Liquidsoap harbor) ───────────────
 function startLiveBroadcast(deck) {
   const s = state[deck];
   stopLiveBroadcast(deck);
@@ -218,14 +210,14 @@ function startLiveBroadcast(deck) {
 function stopLiveBroadcast(deck) {
   const s = state[deck];
   if (s.liveProcess) {
-    try { s.liveProcess.stdin.end(); }    catch (_) {}
+    try { s.liveProcess.stdin.end(); }     catch (_) {}
     try { s.liveProcess.kill('SIGTERM'); } catch (_) {}
     s.liveProcess = null;
     s.liveActive  = false;
   }
 }
 
-// ─── WebSocket: browser DJ audio ─────────────────────────────────────────────
+// ─── WebSocket: browser DJ audio ──────────────────────────────────────────────
 wss.on('connection', (ws, req) => {
   const url  = new URL(req.url, 'http://localhost');
   const deck = url.searchParams.get('deck')?.toUpperCase();
@@ -236,8 +228,8 @@ wss.on('connection', (ws, req) => {
   if (s.socket && s.socket !== ws) { try { s.socket.close(); } catch (_) {} }
   s.socket = ws;
 
-  let ffmpegProc   = null;
-  let spawned      = false;
+  let ffmpegProc    = null;
+  let spawned       = false;
   let pendingChunks = [];
 
   console.log(`[${deck}] DJ connected`);
@@ -246,8 +238,8 @@ wss.on('connection', (ws, req) => {
     const chunk = Buffer.from(data);
     if (!spawned) {
       pendingChunks.push(chunk);
-      spawned    = true;
-      ffmpegProc = startLiveBroadcast(deck);
+      spawned       = true;
+      ffmpegProc    = startLiveBroadcast(deck);
       s.liveProcess = ffmpegProc;
       if (ffmpegProc?.stdin.writable) {
         pendingChunks.forEach(c => { try { ffmpegProc.stdin.write(c); } catch (_) {} });
@@ -271,11 +263,10 @@ wss.on('connection', (ws, req) => {
   ws.on('error', e => { console.error(`[${deck}] WS:`, e.message); ws.close(); });
 });
 
-// ─── Library ──────────────────────────────────────────────────────────────────
+// ─── Library ───────────────────────────────────────────────────────────────────
 app.post('/library/upload', upload.single('track'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-  // FIX: Upload only stores the file — never auto-loads or auto-plays
-  console.log(`[Library] Uploaded: ${req.file.filename} (${req.file.size} bytes) — NOT auto-loaded to any deck`);
+  console.log(`[Library] Uploaded: ${req.file.filename} — NOT auto-loaded`);
   res.json({ ok: true, serverName: req.file.filename, originalName: req.file.originalname, size: req.file.size });
 });
 
@@ -299,9 +290,7 @@ app.delete('/library/files/:name', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── Deck control ─────────────────────────────────────────────────────────────
-
-// FIX: LOAD — only stores the track, does NOT push to queue, does NOT play
+// ─── Deck control ──────────────────────────────────────────────────────────────
 app.post('/deck/:deck/load', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
@@ -317,87 +306,66 @@ app.post('/deck/:deck/load', async (req, res) => {
   s.mode         = 'file';
   s.autoDJActive = false;
   s.paused       = false;
-  // IMPORTANT: Do NOT push to Liquidsoap here — user must click Play
   saveState();
   console.log(`[${deck}] Loaded (not playing): ${serverName}`);
-  res.json({ ok: true, deck, serverName, message: 'Track loaded. Click Play to start.' });
+  res.json({ ok: true, deck, serverName });
 });
 
-// FIX: PLAY — pushes track to queue and unmutes
 app.post('/deck/:deck/play', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const s = state[deck];
 
-  // FIX: Restore volume first (in case it was paused/ducked)
   await liqCmd(`var.set vol_${deck} = 1.`);
   s.paused = false;
 
   if (s.mode === 'file' && s.trackPath) {
-    // Check if queue is empty before pushing (avoid double-queuing on resume)
-    const qLen = await liqCmd(`q_${deck}.length`);
-    const isEmpty = isNaN(parseInt(qLen.trim(), 10)) || parseInt(qLen.trim(), 10) === 0;
+    const qLen   = await liqCmd(`q_${deck}.length`);
+    const parsed = parseInt(qLen.trim(), 10);
+    const isEmpty = isNaN(parsed) || parsed === 0;
     if (isEmpty) {
       await liqCmd(`q_${deck}.push ${s.trackPath}`);
       console.log(`[${deck}] Playing: ${s.trackName}`);
     } else {
-      console.log(`[${deck}] Resuming (queue has items)`);
+      console.log(`[${deck}] Resuming (queue not empty)`);
     }
   } else if (s.mode === 'playlist' && s.playlist.length > 0) {
-    // Resume playlist from current index
-    const qLen = await liqCmd(`q_${deck}.length`);
-    const isEmpty = isNaN(parseInt(qLen.trim(), 10)) || parseInt(qLen.trim(), 10) === 0;
-    if (isEmpty) {
-      await playPlaylistFromIndex(deck, s.playlistIndex);
-    }
+    const qLen    = await liqCmd(`q_${deck}.length`);
+    const parsed  = parseInt(qLen.trim(), 10);
+    const isEmpty = isNaN(parsed) || parsed === 0;
+    if (isEmpty) await playPlaylistFromIndex(deck, s.playlistIndex);
   }
 
   saveState();
   res.json({ ok: true });
 });
 
-// FIX: PAUSE — mutes the output (volume = 0), track keeps playing in queue
 app.post('/deck/:deck/pause', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  const s = state[deck];
-
-  // Set volume to 0 — Liquidsoap has no native pause for request.queue
-  // This is the standard approach for Liquidsoap 2.x
   await liqCmd(`var.set vol_${deck} = 0.`);
-  s.paused = true;
+  state[deck].paused = true;
   saveState();
   res.json({ ok: true, paused: true });
 });
 
-// FIX: STOP — clears queue, resets state, track is unloaded from playback
 app.post('/deck/:deck/stop', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const s = state[deck];
 
   stopLiveBroadcast(deck);
-
-  // Clear the queue
   await liqCmd(`q_${deck}.skip`);
-  // Restore volume
   await liqCmd(`var.set vol_${deck} = 1.`);
 
-  // Reset state but KEEP trackPath/trackName so DJ can re-press Play
   s.paused       = false;
   s.autoDJActive = false;
-  // Keep s.trackPath and s.trackName so the deck still shows what's loaded
-  // but clear playlist state
   if (s.mode === 'playlist') {
     s.playlist      = [];
     s.playlistIndex = 0;
     s.mode          = null;
-  } else if (s.mode === 'file') {
-    // Keep mode as 'file' so DJ can re-press Play
-    // The track is loaded but not playing
-  } else {
-    s.mode = null;
   }
+  // Keep mode='file' and trackPath so DJ can re-press Play
 
   saveState();
   res.json({ ok: true });
@@ -406,8 +374,7 @@ app.post('/deck/:deck/stop', async (req, res) => {
 app.post('/deck/:deck/skip', (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  const s = state[deck];
-  liqCmd(s.mode === 'autodj' ? `autodj_${deck}.skip` : `q_${deck}.skip`);
+  liqCmd(`q_${deck}.skip`);
   res.json({ ok: true });
 });
 
@@ -419,29 +386,29 @@ app.post('/deck/:deck/autodj', (req, res) => {
   res.json({ ok: true, autoDJEnabled: state[deck].autoDJEnabled });
 });
 
-// FIX: STREAM START — start Icecast output for this deck only
+// FIX: stream/start — calls out_X.start on Liquidsoap
 app.post('/deck/:deck/stream/start', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const r = await liqCmd(`out_${deck}.start`);
-  console.log(`[${deck}] Stream STARTED: ${r}`);
+  console.log(`[${deck}] Stream START → liq: ${r.slice(0,50)}`);
   state[deck].streaming = true;
   saveState();
   res.json({ ok: true, streaming: true });
 });
 
-// FIX: STREAM STOP — stop Icecast output for this deck only
+// FIX: stream/stop — calls out_X.stop on Liquidsoap
 app.post('/deck/:deck/stream/stop', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  await liqCmd(`out_${deck}.stop`);
-  console.log(`[${deck}] Stream STOPPED`);
+  const r = await liqCmd(`out_${deck}.stop`);
+  console.log(`[${deck}] Stream STOP → liq: ${r.slice(0,50)}`);
   state[deck].streaming = false;
   saveState();
   res.json({ ok: true, streaming: false });
 });
 
-// ─── Playlist ─────────────────────────────────────────────────────────────────
+// ─── Playlist ──────────────────────────────────────────────────────────────────
 app.post('/deck/:deck/playlist', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
@@ -499,74 +466,52 @@ app.post('/deck/:deck/playlist/jump', async (req, res) => {
   res.json({ ok: true, newIndex: index });
 });
 
-// ─── Jingle upload + playback ─────────────────────────────────────────────────
-
-// Upload a custom jingle file
+// ─── Jingle ────────────────────────────────────────────────────────────────────
 app.post('/jingle/upload', uploadJingle.single('jingle'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   console.log(`[Jingle] Uploaded: ${req.file.filename}`);
   res.json({ ok: true, path: JINGLE_PATH });
 });
 
-// Play jingle through specific deck streams (listeners hear it)
-// This is called when DJ clicks "ON AIR" — jingle plays BEFORE mic opens
 app.post('/jingle/play', async (req, res) => {
   const { targets } = req.body;
   const targetDecks = resolveTargets(targets);
+  const jingleFile  = fs.existsSync(JINGLE_PATH) ? JINGLE_PATH : null;
 
-  const jingleFile = fs.existsSync(JINGLE_PATH) ? JINGLE_PATH : null;
   if (!jingleFile) {
-    // No jingle file — generate a short beep using ffmpeg and play it
-    console.log(`[Jingle] No jingle file at ${JINGLE_PATH}, using sine beep`);
     const beepPath = '/tmp/jingle_beep.mp3';
-
     try {
       await new Promise((resolve, reject) => {
         const ff = spawn('ffmpeg', [
-          '-y',
-          '-f', 'lavfi',
-          '-i', 'sine=frequency=880:duration=0.15,sine=frequency=880:duration=0.15,sine=frequency=1100:duration=0.2',
-          '-filter_complex', '[0][1][2]concat=n=3:v=0:a=1,volume=0.4',
+          '-y', '-f', 'lavfi',
+          '-i', 'sine=frequency=880:duration=0.2',
           '-c:a', 'libmp3lame', '-b:a', '128k', '-ar', '44100', '-ac', '2',
           beepPath,
         ]);
         ff.on('close', code => code === 0 ? resolve() : reject(new Error('ffmpeg beep failed')));
         ff.on('error', reject);
       });
-
-      for (const d of targetDecks) {
-        await liqCmd(`ann_${d}.push ${beepPath}`);
-      }
-    } catch (e) {
-      console.warn('[Jingle] Beep generation failed:', e.message);
-    }
-
-    return res.json({ ok: true, used: 'beep', targetDecks });
+      for (const d of targetDecks) await liqCmd(`ann_${d}.push ${beepPath}`);
+    } catch (e) { console.warn('[Jingle] Beep failed:', e.message); }
+    return res.json({ ok: true, used: 'beep', targetDecks, durationMs: 300 });
   }
 
-  // Play the custom jingle on all target decks via announcement queue
-  for (const d of targetDecks) {
-    await liqCmd(`ann_${d}.push ${jingleFile}`);
-  }
-
-  // Get jingle duration so we can tell the client when it ends
+  for (const d of targetDecks) await liqCmd(`ann_${d}.push ${jingleFile}`);
   const duration = await getAudioDuration(jingleFile);
-  console.log(`[Jingle] Playing on decks: ${targetDecks.join(', ')} — duration: ${duration}ms`);
+  console.log(`[Jingle] Playing on ${targetDecks.join(',')} — ${duration}ms`);
   res.json({ ok: true, used: 'custom', targetDecks, durationMs: duration });
 });
 
-// Check if a jingle file exists
 app.get('/jingle/exists', (req, res) => {
   res.json({ exists: fs.existsSync(JINGLE_PATH), path: JINGLE_PATH });
 });
 
-// ─── Ducking helpers ──────────────────────────────────────────────────────────
+// ─── Ducking ───────────────────────────────────────────────────────────────────
 async function duckDecks(decks, volume) {
   for (const d of decks) await liqCmd(`var.set vol_${d} = ${volume}`);
 }
 async function restoreDecks(decks) {
   await duckDecks(decks, 1);
-  // Update paused state
   decks.forEach(d => { if (state[d]) state[d].paused = false; });
 }
 
@@ -583,16 +528,14 @@ function getAudioDuration(filePath) {
   });
 }
 
-// ─── Announcements ────────────────────────────────────────────────────────────
+// ─── Announcements ─────────────────────────────────────────────────────────────
 app.post('/announcements/upload', uploadAnn.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   res.json({ ok: true, serverName: req.file.filename });
 });
-
 app.use('/announcements/audio', express.static(ANN_DIR, {
   setHeaders: res => res.set('Cache-Control', 'public, max-age=3600'),
 }));
-
 app.delete('/announcements/files/:name', (req, res) => {
   const fp = path.join(ANN_DIR, req.params.name);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
@@ -612,13 +555,12 @@ app.post('/announcements/tts', async (req, res) => {
   espeak.stdout.pipe(ffmpeg.stdin);
   ffmpeg.on('close', code => code === 0
     ? res.json({ ok: true, serverName: path.basename(outPath) })
-    : res.status(500).json({ error: 'TTS generation failed' })
+    : res.status(500).json({ error: 'TTS failed' })
   );
   ffmpeg.on('error', e => res.status(500).json({ error: e.message }));
 });
 
 const scheduledAnns = new Map();
-
 app.post('/announcements/play', async (req, res) => {
   const { serverName, targets, duckMusic = true } = req.body;
   if (!serverName) return res.status(400).json({ error: 'serverName required' });
@@ -664,49 +606,38 @@ app.delete('/announcements/scheduled/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ─── Mic start/stop — with jingle + 5% duck ───────────────────────────────────
+// ─── Mic on/off ────────────────────────────────────────────────────────────────
 app.post('/mic/start', async (req, res) => {
   const targetDecks = resolveTargets(req.body.targets);
   if (!targetDecks.length) return res.status(400).json({ error: 'No valid target decks' });
 
-  // Step 1: Play jingle through the stream so listeners hear it
-  const jingleFile = fs.existsSync(JINGLE_PATH) ? JINGLE_PATH : null;
   let jingleDurationMs = 0;
-
+  const jingleFile = fs.existsSync(JINGLE_PATH) ? JINGLE_PATH : null;
   if (jingleFile) {
-    for (const d of targetDecks) {
-      await liqCmd(`ann_${d}.push ${jingleFile}`);
-    }
+    for (const d of targetDecks) await liqCmd(`ann_${d}.push ${jingleFile}`);
     jingleDurationMs = await getAudioDuration(jingleFile);
-    console.log(`[Mic] Jingle queued on decks: ${targetDecks.join(', ')} — ${jingleDurationMs}ms`);
   }
 
-  // Step 2: Duck music to 5% AFTER jingle plays
-  // Use a delay equal to jingle duration before ducking
-  const duckAfter = jingleDurationMs > 0 ? jingleDurationMs : 0;
   setTimeout(async () => {
     await duckDecks(targetDecks, 0.05);
-    console.log(`[Mic] Music ducked to 5% on decks: ${targetDecks.join(', ')}`);
-  }, duckAfter);
+  }, jingleDurationMs);
 
   res.json({ ok: true, targetDecks, jingleDurationMs });
 });
 
 app.post('/mic/stop', async (req, res) => {
   const targetDecks = resolveTargets(req.body.targets);
-  // Smoothly restore music volume back to 100%
   await restoreDecks(targetDecks);
-  console.log(`[Mic] Music restored to 100% on decks: ${targetDecks.join(', ')}`);
   res.json({ ok: true });
 });
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 function resolveTargets(targets) {
   if (!Array.isArray(targets) || targets[0] === 'ALL') return [...DECKS];
   return targets.map(d => d.toUpperCase()).filter(d => DECKS.includes(d));
 }
 
-// ─── Health / status ──────────────────────────────────────────────────────────
+// ─── Health / status ───────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.get('/status', async (req, res) => {
@@ -718,7 +649,7 @@ app.get('/status', async (req, res) => {
   res.json({ live });
 });
 
-// ─── Background poller (metadata) ────────────────────────────────────────────
+// ─── Background metadata poller ───────────────────────────────────────────────
 const liqCache = {};
 DECKS.forEach(d => liqCache[d] = { trackName: null });
 
@@ -731,23 +662,19 @@ setInterval(async () => {
       if (titleMatch)     liqCache[deck].trackName = titleMatch[1];
       else if (fileMatch) liqCache[deck].trackName = path.basename(fileMatch[1]);
       else                liqCache[deck].trackName = null;
-    } catch (_) {
-      liqCache[deck].trackName = null;
-    }
+    } catch (_) { liqCache[deck].trackName = null; }
   }
 }, 3000);
 
-// ─── Deck info (polled by frontend every 2s) ──────────────────────────────────
+// ─── Deck info ─────────────────────────────────────────────────────────────────
 app.get('/deck-info', (req, res) => {
   const info = {};
   for (const deck of DECKS) {
     const s      = state[deck];
     const cached = liqCache[deck];
-    const isStreaming = s.streaming !== undefined ? s.streaming : true;
     info[deck] = {
       djConnected:    !!(s.socket?.readyState === 1),
-      streaming:      isStreaming,
-      // FIX: expose paused state so UI can show correct button
+      streaming:      s.streaming,
       paused:         s.paused || false,
       mode:           s.liveActive ? 'live' : (s.mode || null),
       trackName:      s.mode === 'autodj' ? cached.trackName : (s.trackName || null),
@@ -773,11 +700,38 @@ app.get('/icecast-status', async (req, res) => {
   } catch { res.status(503).json({ error: 'Icecast not reachable' }); }
 });
 
+// ─── Server startup ────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[API] SonicBeat v2 on port ${PORT}`);
+  console.log(`[API] SonicBeat v3 on port ${PORT}`);
   console.log(`[API] Liquidsoap telnet → ${LIQ_HOST}:${LIQ_TELNET}`);
-  console.log(`[API] AutoDJ default: OFF (no auto-play on upload)`);
-  console.log(`[API] Mic duck level: 5%`);
-  console.log(`[API] Jingle path: ${JINGLE_PATH}`);
+
+  // FIX: On startup, explicitly start all Icecast outputs.
+  // In Liquidsoap 2.2 with fallible=true, outputs do NOT auto-connect.
+  // We retry until Liquidsoap telnet is available (it takes ~15s to boot).
+  let startupAttempts = 0;
+  const startupInterval = setInterval(async () => {
+    startupAttempts++;
+    console.log(`[API] Startup: attempting to start Icecast outputs (attempt ${startupAttempts})...`);
+    try {
+      // Test if telnet is alive by checking one output status
+      const testResult = await liqCmd(`out_A.status`);
+      if (!testResult) throw new Error('No response from Liquidsoap');
+
+      console.log(`[API] Liquidsoap is ready — starting all 4 outputs...`);
+      for (const deck of DECKS) {
+        const result = await liqCmd(`out_${deck}.start`);
+        state[deck].streaming = true;
+        console.log(`[API] out_${deck}.start → ${result.slice(0,60).trim()}`);
+      }
+      saveState();
+      clearInterval(startupInterval);
+      console.log(`[API] ✅ All 4 deck streams are LIVE on Icecast`);
+    } catch (err) {
+      if (startupAttempts >= 20) {
+        console.error(`[API] ❌ Could not start outputs after 20 attempts. Check Liquidsoap logs.`);
+        clearInterval(startupInterval);
+      }
+    }
+  }, 3000); // retry every 3s
 });

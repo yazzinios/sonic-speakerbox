@@ -1,12 +1,6 @@
 /**
  * useServerDeck — Server Mode state + control hook
- *
- * This is the SERVER_MODE equivalent of useAudioEngine.
- * The browser never plays audio. Everything goes through the API.
- *
- * - Polls /deck-info every 2s for live server state
- * - Exposes all deck control actions (load, play, pause, stop, skip, autodj, playlist)
- * - Returns server online status so the UI can show a warning if offline
+ * v2: Added paused state, jingle support, improved play/pause/stop reliability
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { DeckId } from '@/types/channels';
@@ -23,6 +17,7 @@ export interface ServerDeckState {
   autoDJEnabled: boolean;
   autoDJActive: boolean;
   looping: boolean;
+  paused: boolean;
   playlistLength: number;
   playlistIndex: number;
   playlistLoop: boolean;
@@ -37,9 +32,10 @@ const EMPTY_DECK: ServerDeckState = {
   trackPath: null,
   streaming: false,
   djConnected: false,
-  autoDJEnabled: true,
+  autoDJEnabled: false,
   autoDJActive: false,
   looping: false,
+  paused: false,
   playlistLength: 0,
   playlistIndex: 0,
   playlistLoop: false,
@@ -102,7 +98,7 @@ export function useServerDeck() {
   const loadTrack = useCallback(async (deck: DeckId, track: LibraryTrack, loop = false) => {
     try {
       await apiPost(`/deck/${deck}/load`, { serverName: track.serverName, loop });
-      toast.success(`Deck ${deck} ▶ ${track.name}`);
+      toast.success(`Deck ${deck} — "${track.name}" loaded. Press ▶ to play.`);
       fetchStatus();
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';
@@ -163,7 +159,7 @@ export function useServerDeck() {
   const startStream = useCallback(async (deck: DeckId) => {
     try {
       await apiPost(`/deck/${deck}/stream/start`);
-      toast.success(`Deck ${deck} stream STARTED`);
+      toast.success(`Deck ${deck} ▶ Broadcasting LIVE`);
       fetchStatus();
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';
@@ -174,7 +170,7 @@ export function useServerDeck() {
   const stopStream = useCallback(async (deck: DeckId) => {
     try {
       await apiPost(`/deck/${deck}/stream/stop`);
-      toast.success(`Deck ${deck} stream STOPPED`);
+      toast.success(`Deck ${deck} ■ Stream stopped`);
       fetchStatus();
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';

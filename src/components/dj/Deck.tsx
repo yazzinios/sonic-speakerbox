@@ -84,7 +84,6 @@ export function Deck({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (!SERVER_MODE && analyser) {
-        // Real frequency data from Web Audio
         const bufLen = analyser.frequencyBinCount;
         const data = new Uint8Array(bufLen);
         analyser.getByteFrequencyData(data);
@@ -95,8 +94,8 @@ export function Deck({
           ctx.fillStyle = `hsla(${hue}, 100%, ${lightness}%, 0.85)`;
           ctx.fillRect(i * barW, canvas.height - h, barW - 1, h);
         }
-      } else if (SERVER_MODE && serverState?.streaming) {
-        // Animated pulse when server is streaming
+      } else if (SERVER_MODE && serverState?.streaming && !serverState?.paused) {
+        // Animated pulse when server is streaming (not paused)
         const t = Date.now() / 800;
         const barCount = 32;
         const barW = canvas.width / barCount;
@@ -105,71 +104,86 @@ export function Deck({
           ctx.fillStyle = `hsla(${hue}, 80%, 55%, 0.6)`;
           ctx.fillRect(i * barW, canvas.height - h, barW - 1, h);
         }
+      } else if (SERVER_MODE && serverState?.paused) {
+        // Static low bars when paused
+        const barCount = 32;
+        const barW = canvas.width / barCount;
+        for (let i = 0; i < barCount; i++) {
+          const h = canvas.height * 0.08;
+          ctx.fillStyle = `hsla(${hue}, 60%, 40%, 0.35)`;
+          ctx.fillRect(i * barW, canvas.height - h, barW - 1, h);
+        }
       }
       animRef.current = requestAnimationFrame(draw);
     };
     draw();
     return () => cancelAnimationFrame(animRef.current);
-  }, [analyser, color.hue, serverState?.streaming]);
+  }, [analyser, color.hue, serverState?.streaming, serverState?.paused]);
 
   // ── Derived display values ────────────────────────────────────────────────
   const isServerMode = SERVER_MODE;
 
-  // Track name to display
   const displayTrack = isServerMode
     ? cleanTrackName(serverState?.currentTrack?.name || serverState?.trackName || null)
     : cleanTrackName(browserState?.fileName || null);
 
-  // Is something playing?
-  const isPlaying = isServerMode
-    ? (serverState?.streaming && serverState?.mode !== null)
+  // FIX: correct playing state — paused is NOT playing
+  const isActuallyPlaying = isServerMode
+    ? (serverState?.streaming && serverState?.mode !== null && !serverState?.paused)
     : (browserState?.isPlaying ?? false);
 
-  // Playlist info
-  const inPlaylist = isServerMode
-    ? serverState?.mode === 'playlist'
+  const isPaused = isServerMode
+    ? (serverState?.paused === true)
     : false;
+
+  // Has a track loaded (even if stopped/paused)
+  const hasTrack = isServerMode
+    ? !!(serverState?.trackName || serverState?.currentTrack)
+    : !!(browserState?.fileName);
+
+  const inPlaylist = isServerMode ? serverState?.mode === 'playlist' : false;
   const playlistIdx = serverState?.playlistIndex ?? 0;
   const playlistLen = serverState?.playlistLength ?? 0;
 
   // Mode badge
   const modeBadge = isServerMode ? (
-    serverState?.mode === 'live' ? '🔴 Live' :
-      serverState?.mode === 'playlist' ? '📋 Playlist' :
-        serverState?.mode === 'file' ? '🎵 File' :
-          serverState?.mode === 'autodj' ? '🔀 AutoDJ' : null
+    serverState?.mode === 'live'     ? '🔴 Live' :
+    serverState?.mode === 'playlist' ? '📋 Playlist' :
+    serverState?.mode === 'file'     ? '🎵 File' :
+    serverState?.mode === 'autodj'   ? '🔀 AutoDJ' : null
   ) : null;
 
   const copyStreamUrl = () => {
     const url = getDeckStreamUrl(id);
     try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function' && window.isSecureContext) {
-        navigator.clipboard.writeText(url).then(
-          () => toast.success(`Stream URL copied — paste into VLC`),
-          () => toast.error(`Failed to copy to clipboard`)
-        );
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url)
+          .then(() => toast.success(`Stream URL copied — paste into VLC`))
+          .catch(() => fallbackCopyUrl(url));
       } else {
-        throw new Error('Clipboard API unavailable');
+        fallbackCopyUrl(url);
       }
     } catch (e) {
-      // Fallback
-      try {
-        const el = document.createElement('textarea');
-        el.value = url; el.style.position = 'fixed'; el.style.opacity = '0';
-        document.body.appendChild(el); el.focus(); el.select();
-        const successful = document.execCommand('copy');
-        document.body.removeChild(el);
-        if (successful) toast.success(`URL copied via fallback — paste into VLC`);
-        else throw new Error('execCommand failed');
-      } catch (err) {
-        toast.info(`Manually copy: ${url}`);
-      }
+      fallbackCopyUrl(url);
     }
   };
 
+  const fallbackCopyUrl = (url: string) => {
+    try {
+      const el = document.createElement('textarea');
+      el.value = url; el.style.position = 'fixed'; el.style.opacity = '0';
+      document.body.appendChild(el); el.focus(); el.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(el);
+      if (ok) toast.success('URL copied — paste into VLC');
+      else toast.info(`Manually copy: ${url}`);
+    } catch { toast.info(`Manually copy: ${url}`); }
+  };
+
   return (
-    <div className={`rounded-lg border bg-card p-3 space-y-2 transition-colors ${isServerMode && serverState?.streaming ? `border-${color.class}/40` : ''
-      }`}>
+    <div className={`rounded-lg border bg-card p-3 space-y-2 transition-colors ${
+      isServerMode && serverState?.streaming ? `border-${color.class}/40` : ''
+    }`}>
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
@@ -181,18 +195,26 @@ export function Deck({
             {displayTrack}
           </span>
           <div className="flex items-center justify-end gap-1.5 flex-wrap">
-            {isServerMode && serverState?.streaming && (
+            {isServerMode && serverState?.streaming && !serverState?.paused && (
               <span className="flex items-center gap-0.5 text-[9px] text-green-500 font-bold">
                 <Radio className="h-2.5 w-2.5 animate-pulse" /> LIVE
               </span>
             )}
-            {modeBadge && (
+            {isServerMode && isPaused && (
+              <span className="flex items-center gap-0.5 text-[9px] text-yellow-500 font-bold">
+                ⏸ PAUSED
+              </span>
+            )}
+            {modeBadge && !isPaused && (
               <span className="text-[9px] text-muted-foreground">{modeBadge}</span>
             )}
             {inPlaylist && (
               <span className="flex items-center gap-0.5 text-[9px] text-primary font-semibold">
                 <ListMusic className="h-2.5 w-2.5" /> {playlistIdx + 1}/{playlistLen}
               </span>
+            )}
+            {serverState?.looping && (
+              <span className="text-[9px] text-primary animate-pulse">🔁 LOOP</span>
             )}
             {!isServerMode && browserState?.loopActive && (
               <span className="text-[9px] text-primary animate-pulse">LOOP</span>
@@ -217,37 +239,57 @@ export function Deck({
 
       {/* ── Controls ────────────────────────────────────────────────────── */}
       {isServerMode ? (
-        /* Server mode controls */
+        /* ── Server mode controls ── */
         <div className="space-y-1.5">
           <div className="flex items-center gap-1">
-            {/* Play/Pause */}
-            {isPlaying ? (
-              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
-                if (onServerPause) onServerPause();
-                else toast.error('Pause not available');
-              }} title="Pause">
-                <Pause className="h-3 w-3" />
-              </Button>
-            ) : (
-              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
-                if (onServerPlay) onServerPlay();
-                else toast.error('Play not available');
-              }} title="Play / Resume">
-                <Play className="h-3 w-3" />
+
+            {/* FIX: Play button — shows when stopped OR paused */}
+            {(!isActuallyPlaying) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 w-7 p-0"
+                onClick={() => onServerPlay?.()}
+                title={isPaused ? 'Resume' : 'Play'}
+                disabled={!hasTrack && !serverState?.playlist?.length}
+              >
+                <Play className={`h-3 w-3 ${isPaused ? 'text-yellow-400' : ''}`} />
               </Button>
             )}
+
+            {/* FIX: Pause button — shows only when actually playing */}
+            {isActuallyPlaying && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 w-7 p-0"
+                onClick={() => onServerPause?.()}
+                title="Pause (music continues server-side, silenced)"
+              >
+                <Pause className="h-3 w-3" />
+              </Button>
+            )}
+
             {/* Stop */}
-            <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
-                if (onServerStop) onServerStop();
-                else toast.error('Stop not available');
-            }} title="Stop (returns to AutoDJ)">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 w-7 p-0"
+              onClick={() => onServerStop?.()}
+              title="Stop"
+              disabled={!hasTrack && !isActuallyPlaying && !isPaused}
+            >
               <Square className="h-3 w-3" />
             </Button>
+
             {/* Skip */}
-            <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => {
-                if (onServerSkip) onServerSkip();
-                else toast.error('Skip not available');
-            }} title="Skip to next track">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 w-7 p-0"
+              onClick={() => onServerSkip?.()}
+              title="Skip to next"
+            >
               <SkipForward className="h-3 w-3" />
             </Button>
 
@@ -257,34 +299,47 @@ export function Deck({
               variant={serverState?.autoDJEnabled ? 'default' : 'outline'}
               className="h-7 px-2 text-[10px]"
               onClick={() => onServerAutoDJ?.(!serverState?.autoDJEnabled)}
-              title="Toggle AutoDJ"
+              title={serverState?.autoDJEnabled ? 'AutoDJ ON — click to disable' : 'AutoDJ OFF — click to enable'}
             >
               <Shuffle className="h-3 w-3 mr-1" />
               ADJ
             </Button>
-            {/* Stream On/Off Toggle */}
+
+            {/* FIX: Stream ON/OFF — clear visual state */}
             <Button
               size="sm"
               variant={serverState?.streaming ? 'destructive' : 'default'}
-              className="h-7 px-2 text-[10px] font-bold"
+              className={`h-7 px-2 text-[10px] font-bold ${serverState?.streaming ? '' : 'bg-green-600 hover:bg-green-700 text-white border-green-600'}`}
               onClick={() => serverState?.streaming ? onServerStopStream?.() : onServerStartStream?.()}
-              title={serverState?.streaming ? 'Stop Stream (Go Offline)' : 'Start Stream (Go Live)'}
+              title={serverState?.streaming ? 'Stop Broadcasting (go offline)' : 'Start Broadcasting (go live)'}
             >
               <Radio className={`h-3 w-3 mr-1 ${serverState?.streaming ? 'animate-pulse' : ''}`} />
               {serverState?.streaming ? 'ON' : 'OFF'}
             </Button>
+
             {/* Copy VLC URL */}
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 ml-auto" onClick={copyStreamUrl}
-              title="Copy VLC stream URL">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 ml-auto"
+              onClick={copyStreamUrl}
+              title="Copy VLC stream URL"
+            >
               <Copy className="h-3 w-3" />
             </Button>
 
-            {/* Expand (for EQ etc. — still useful for server mode visual) */}
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setShowControls(!showControls)}>
+            {/* Expand */}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={() => setShowControls(!showControls)}
+            >
               {showControls ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             </Button>
           </div>
-          {/* VLC stream URL display */}
+
+          {/* VLC stream URL */}
           <div className="flex items-center gap-1 bg-muted/30 rounded px-2 py-1">
             <Radio className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
             <span className="text-[10px] font-mono text-muted-foreground truncate">
@@ -293,11 +348,20 @@ export function Deck({
           </div>
         </div>
       ) : (
-        /* Browser mode controls */
+        /* ── Browser mode controls ── */
         <div className="space-y-1">
           <div className="flex items-center gap-1">
-            <input ref={fileInputRef} type="file" accept="audio/*" className="hidden"
-              onChange={(e) => { const file = e.target.files?.[0]; if (file) onBrowserLoad?.(file); e.target.value = ''; }} />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onBrowserLoad?.(file);
+                e.target.value = '';
+              }}
+            />
             <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => fileInputRef.current?.click()}>
               <Upload className="h-3 w-3" />
             </Button>
@@ -329,7 +393,7 @@ export function Deck({
         </div>
       )}
 
-      {/* ── Extended controls (EQ, speed, loop, YouTube) — browser mode only ── */}
+      {/* ── Extended controls (browser mode only) ── */}
       {showControls && !isServerMode && browserState && (
         <DeckControls
           id={id} state={browserState}
@@ -341,11 +405,18 @@ export function Deck({
         />
       )}
 
-      {/* Server mode expanded: show playlist tracks if in playlist mode */}
+      {/* Server mode expanded: show playlist tracks */}
       {showControls && isServerMode && inPlaylist && serverState?.playlist && (
         <div className="border-t pt-2 space-y-1 max-h-28 overflow-y-auto">
           {serverState.playlist.map((t, i) => (
-            <div key={i} className={`text-xs px-2 py-0.5 rounded truncate ${i === playlistIdx ? 'bg-primary/10 text-primary font-semibold' : 'text-muted-foreground'}`}>
+            <div
+              key={i}
+              className={`text-xs px-2 py-0.5 rounded truncate ${
+                i === playlistIdx
+                  ? 'bg-primary/10 text-primary font-semibold'
+                  : 'text-muted-foreground'
+              }`}
+            >
               {i === playlistIdx ? '▶ ' : `${i + 1}. `}{cleanTrackName(t.name)}
             </div>
           ))}

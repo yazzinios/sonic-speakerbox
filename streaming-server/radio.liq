@@ -1,12 +1,13 @@
 # ============================================================
 # SonicBeat Radio — Resilient Liquidsoap 2.1.x
+# v2: No auto-play, loop support, jingle via announcement queue
 # ============================================================
 
 set("log.level", 3)
 set("log.stdout", true)
 set("init.allow_root", true)
 
-# IMPORTANT: Don't crash if playlist directory is initially empty or files are bad
+# Don't crash if files are bad or missing
 set("request.grace_time", 2.)
 
 # ── Telnet Control Server ────────────────────────────────────────────────────
@@ -25,7 +26,8 @@ harbor_port      = 8005
 
 # ── Dynamic channel constructor ──────────────────────────────────────────────
 def make_channel(name, mountpoint) =
-  # 1. Harbor input (microphone/live dj)
+
+  # 1. Harbor input — live DJ mic/broadcast via WebSocket → ffmpeg → harbor
   mic = input.harbor(
     "/mic/deck-#{string.case(lower=true, name)}",
     port     = harbor_port,
@@ -34,42 +36,60 @@ def make_channel(name, mountpoint) =
     max      = 2.0
   )
 
-  # 2. Announcement queue
+  # 2. Announcement queue — used for jingles, TTS, scheduled announcements
+  #    Jingle is pushed here by /jingle/play so listeners hear it through the stream
   announcements = request.queue(id="ann_#{name}")
 
-  # 3. Explicit track queue
+  # 3. Explicit track queue — DJ pushes tracks here manually via Play button
+  #    Node.js also uses q_#{name}.length to detect when a track ends (for loop)
   track_q = request.queue(id="q_#{name}")
 
-  # 4. AutoDJ is now controlled by Node.js pushing to q_#{name}
-  # We remove the automatic folder playlist to prevent tracks playing on upload.
-  
-  # Fallback: queue > silence
-  music_base = fallback(track_sensitive=false, [track_q, blank(id="blank_#{name}")])
+  # 4. Silence fallback — plays when queue is empty (no AutoDJ folder)
+  #    This intentionally does NOT auto-load tracks from the upload folder.
+  #    The DJ must explicitly press Play to load a track.
+  music_base = fallback(
+    track_sensitive=false,
+    [track_q, blank(id="blank_#{name}")]
+  )
 
-  # Volume control through amplify (for ducking the music during mic/announcements)
+  # 5. Volume control — used for:
+  #    - Ducking music to 5% when mic is ON AIR
+  #    - Simulating pause (set to 0)
+  #    - Restoring to 100% after mic goes OFF AIR
   vol = interactive.float("vol_#{name}", 1.)
   music_amp = amplify(vol, music_base)
 
-  # Final mix
-  radio_mix = add(id="mix_node_#{name}", [music_amp, announcements, mic])
+  # 6. Final mix — priority order: announcements/jingle > music > silence
+  #    mic is always mixed in (at 0 gain when not connected)
+  radio_mix = add(
+    id="mix_node_#{name}",
+    [music_amp, announcements, mic]
+  )
 
-  # Output to Icecast gracefully (fallible = true ensures liquidsoap doesn't crash if icecast isn't ready)
+  # 7. Icecast output — fallible=true means it won't crash if Icecast is down
+  #    out_#{name}.start / out_#{name}.stop controlled via telnet
   output.icecast(
     %mp3(bitrate=128),
-    id            = "out_#{name}",
-    host          = icecast_host,
-    port          = icecast_port,
-    password      = icecast_password,
-    mount         = mountpoint,
-    name          = "SonicBeat Deck #{name}",
-    description   = "SonicBeat Radio — Deck #{name} (Isolated v2.3)",
-    public        = false,
-    fallible      = true,
+    id          = "out_#{name}",
+    host        = icecast_host,
+    port        = icecast_port,
+    password    = icecast_password,
+    mount       = mountpoint,
+    name        = "SonicBeat Deck #{name}",
+    description = "SonicBeat Radio — Deck #{name} (v2)",
+    public      = false,
+    fallible    = true,
     radio_mix
   )
 end
 
-# Build the 4 decks
+# ── Build 4 isolated deck channels ───────────────────────────────────────────
+# Each deck is completely independent:
+#   - Separate Icecast mount (/deck-a, /deck-b, /deck-c, /deck-d)
+#   - Separate track queue (q_A, q_B, q_C, q_D)
+#   - Separate volume control (vol_A, vol_B, vol_C, vol_D)
+#   - Separate announcement queue (ann_A, ann_B, ann_C, ann_D)
+#   - Separate harbor input for live mic (deck-a, deck-b, deck-c, deck-d)
 make_channel("A", "deck-a")
 make_channel("B", "deck-b")
 make_channel("C", "deck-c")

@@ -1,12 +1,15 @@
 # ============================================================
 # SonicBeat Radio — Liquidsoap 2.2.5
-# FIXED: on_error syntax, mksafe, output auto-connect on boot
+# FIXED: grace_time reduced, frame.duration for lower latency
 # ============================================================
 
 set("log.level", 3)
 set("log.stdout", true)
 set("init.allow_root", true)
-set("request.grace_time", 2.)
+set("request.grace_time", 0.5)   # FIX: was 2. — reduces load-to-play delay
+
+# FIX: smaller audio frames = lower latency on the stream
+set("frame.duration", 0.02)
 
 # ── Telnet ───────────────────────────────────────────────────────────────────
 set("server.telnet", true)
@@ -28,8 +31,8 @@ def make_channel(name, mountpoint) =
     "/mic/deck-#{string.case(lower=true, name)}",
     port     = harbor_port,
     password = icecast_password,
-    buffer   = 0.5,
-    max      = 2.0
+    buffer   = 0.2,   # FIX: was 0.5 — less buffering = lower sync latency
+    max      = 1.0    # FIX: was 2.0 — tighter max buffer
   )
 
   # Announcement queue (jingles, TTS, scheduled clips)
@@ -39,8 +42,6 @@ def make_channel(name, mountpoint) =
   track_q = request.queue(id="q_#{name}")
 
   # mksafe: wraps queue so it always outputs silence when empty.
-  # Without this, Liquidsoap considers the source "unavailable" and
-  # output.icecast disconnects from Icecast entirely.
   safe_track = mksafe(track_q)
   safe_ann   = mksafe(announcements)
 
@@ -55,10 +56,7 @@ def make_channel(name, mountpoint) =
     [music_amp, safe_ann, mic]
   )
 
-  # Icecast output
-  # fallible=false: Liquidsoap will KEEP retrying to connect to Icecast
-  # automatically on boot and after any disconnection.
-  # This is the most reliable option — no manual out_X.start needed.
+  # Icecast output — fallible=false keeps retrying on disconnect automatically
   output.icecast(
     %mp3(bitrate=128, samplerate=44100, stereo=true),
     id          = "out_#{name}",

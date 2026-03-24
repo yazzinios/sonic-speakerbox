@@ -1,8 +1,11 @@
 /**
  * SonicBeat API Server — Liquidsoap 2.2.5
  *
- * v5: REAL-TIME telnet — persistent connection, no reconnect per command
- *     Pause/Play/Stop now respond in <10ms instead of 200-500ms
+ * v5:   REAL-TIME telnet — persistent connection, no reconnect per command
+ *       Pause/Play/Stop now respond in <10ms instead of 200-500ms
+ * v5.1: FIX streaming default → false (button no longer shows ON AIR on boot)
+ *       FIX play endpoint notifies UI 800ms after push so state reflects quickly
+ *       FIX stop/pause also broadcast state update after command completes
  */
 const express   = require('express');
 const http      = require('http');
@@ -76,7 +79,7 @@ DECKS.forEach(d => {
     playlistLoop:  s.playlistLoop  || false,
     autoDJEnabled: s.autoDJEnabled !== undefined ? s.autoDJEnabled : false,
     autoDJActive:  false,
-    streaming:     s.streaming !== undefined ? s.streaming : true,
+    streaming:     s.streaming !== undefined ? s.streaming : false,  // FIX: was true — button showed ON AIR on fresh boot
     paused:        s.paused || false,
     socket:        null,
     liveProcess:   null,
@@ -280,6 +283,15 @@ wss.on('connection', (ws, req) => {
   const url  = new URL(req.url, 'http://x');
   const deck = url.searchParams.get('deck')?.toUpperCase();
   const type = url.searchParams.get('type');
+
+  // FIX: 'monitor' connections are read-only listeners for real-time state push
+  // They receive broadcastDeckState() messages and send nothing back.
+  if (type === 'monitor') {
+    // Just keep the connection open — broadcastDeckState() will push to it
+    ws.on('error', () => ws.close());
+    return;
+  }
+
   if (!deck || !DECKS.includes(deck) || type !== 'broadcast') { ws.close(); return; }
   const s = state[deck];
   if (s.socket && s.socket !== ws) { try { s.socket.close(); } catch (_) {} }
@@ -342,7 +354,9 @@ app.post('/deck/:deck/play', async (req, res) => {
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
   const s = state[deck];
   s.paused = false;
-  // Fire-and-forget to API — respond immediately, Liquidsoap processes async
+  // FIX: auto-enable streaming when user hits play so stream goes live immediately
+  s.streaming = true;
+  // Respond immediately so UI feels instant
   res.json({ ok: true });
   await liqCmd(`var.set vol_${deck} = 1.`);
   if (s.mode === 'file' && s.trackPath) {
@@ -355,16 +369,21 @@ app.post('/deck/:deck/play', async (req, res) => {
     if (isNaN(parseInt(r.trim(), 10)) || parseInt(r.trim(), 10) === 0) await playPlaylistFromIndex(deck, s.playlistIndex);
   }
   saveState();
+  // FIX: broadcast state to all WS clients after Liquidsoap has had time to prepare
+  // so the UI transitions from "loaded" to "playing" without waiting for next poll
+  broadcastDeckState();
+  setTimeout(broadcastDeckState, 800);
+  setTimeout(broadcastDeckState, 1800);
 });
 
 app.post('/deck/:deck/pause', async (req, res) => {
   const deck = req.params.deck?.toUpperCase();
   if (!DECKS.includes(deck)) return res.status(400).json({ error: 'Invalid deck' });
-  // Respond to UI immediately — then send command
   state[deck].paused = true;
   res.json({ ok: true, paused: true });
   await liqCmd(`var.set vol_${deck} = 0.`);
   saveState();
+  broadcastDeckState();
 });
 
 app.post('/deck/:deck/stop', async (req, res) => {
@@ -378,6 +397,7 @@ app.post('/deck/:deck/stop', async (req, res) => {
   await liqCmd(`q_${deck}.skip`);
   await liqCmd(`var.set vol_${deck} = 1.`);
   saveState();
+  broadcastDeckState();
 });
 
 app.post('/deck/:deck/skip', (req, res) => {
@@ -574,6 +594,39 @@ app.post('/mic/stop', async (req, res) => {
 function resolveTargets(targets) {
   if (!Array.isArray(targets) || targets[0] === 'ALL') return [...DECKS];
   return targets.map(d => d.toUpperCase()).filter(d => DECKS.includes(d));
+}
+
+// ─── broadcastDeckState: push /deck-info to all connected WS clients ─────────
+// Called after play/pause/stop so the UI updates instantly instead of waiting
+// for the next 2-second poll cycle.
+function broadcastDeckState() {
+  if (wss.clients.size === 0) return;
+  const info = {};
+  for (const deck of DECKS) {
+    const s = state[deck];
+    info[deck] = {
+      djConnected:    !!(s.socket?.readyState === 1),
+      streaming:      s.streaming,
+      paused:         s.paused,
+      mode:           s.liveActive ? 'live' : (s.mode || null),
+      trackName:      s.mode === 'autodj' ? liqCache[deck].trackName : (s.trackName || null),
+      trackPath:      s.trackPath,
+      looping:        s.looping,
+      playlistLength: s.playlist.length,
+      playlistIndex:  s.playlistIndex,
+      playlistLoop:   s.playlistLoop,
+      currentTrack:   s.mode === 'playlist' ? (s.playlist[s.playlistIndex] || null) : null,
+      playlist:       s.playlist,
+      autoDJEnabled:  s.autoDJEnabled,
+      autoDJActive:   !s.liveActive,
+    };
+  }
+  const msg = JSON.stringify({ type: 'deck-state', data: info });
+  wss.clients.forEach(ws => {
+    if (ws.readyState === 1) {
+      try { ws.send(msg); } catch (_) {}
+    }
+  });
 }
 
 // ─── Health / status ──────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { DeckId } from '@/types/channels';
-import { STREAMING_SERVER, getDeckStreamUrl } from '@/lib/streamingServer';
+import { STREAMING_SERVER, WS_SERVER, getDeckStreamUrl } from '@/lib/streamingServer';
 import { toast } from 'sonner';
 import type { LibraryTrack } from '@/hooks/useLibrary';
 
@@ -67,6 +67,16 @@ export function useServerDeck() {
   const [serverOnline, setServerOnline] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const applyDeckInfo = useCallback((data: Record<string, unknown>) => {
+    setServerOnline(true);
+    setDecks({
+      A: { ...EMPTY_DECK, ...(data.A as object), streamUrl: getDeckStreamUrl('A') },
+      B: { ...EMPTY_DECK, ...(data.B as object), streamUrl: getDeckStreamUrl('B') },
+      C: { ...EMPTY_DECK, ...(data.C as object), streamUrl: getDeckStreamUrl('C') },
+      D: { ...EMPTY_DECK, ...(data.D as object), streamUrl: getDeckStreamUrl('D') },
+    });
+  }, []);
+
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`${STREAMING_SERVER}/deck-info`, {
@@ -74,22 +84,42 @@ export function useServerDeck() {
       });
       if (!res.ok) throw new Error('not ok');
       const data = await res.json();
-      setServerOnline(true);
-      setDecks({
-        A: { ...EMPTY_DECK, ...data.A, streamUrl: getDeckStreamUrl('A') },
-        B: { ...EMPTY_DECK, ...data.B, streamUrl: getDeckStreamUrl('B') },
-        C: { ...EMPTY_DECK, ...data.C, streamUrl: getDeckStreamUrl('C') },
-        D: { ...EMPTY_DECK, ...data.D, streamUrl: getDeckStreamUrl('D') },
-      });
+      applyDeckInfo(data);
     } catch (err) {
       console.error('[ServerDeck] Polling failed:', err);
       setServerOnline(false);
     }
-  }, []);
+  }, [applyDeckInfo]);
+
+  // FIX: listen for real-time push messages from server so UI updates
+  // instantly after play/pause/stop instead of waiting for next 2s poll.
+  useEffect(() => {
+    const wsUrl = `${WS_SERVER}?type=monitor`;
+    let ws: WebSocket;
+    let dead = false;
+
+    function connect() {
+      if (dead) return;
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'deck-state' && msg.data) applyDeckInfo(msg.data);
+          } catch (_) {}
+        };
+        ws.onerror = () => ws.close();
+        ws.onclose = () => { if (!dead) setTimeout(connect, 3000); };
+      } catch (_) {}
+    }
+    connect();
+    return () => { dead = true; try { ws?.close(); } catch (_) {} };
+  }, [applyDeckInfo]);
 
   useEffect(() => {
     fetchStatus();
-    pollRef.current = setInterval(fetchStatus, 2000);
+    // FIX: poll every 3s instead of 2s — WS push handles instant updates
+    pollRef.current = setInterval(fetchStatus, 3000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchStatus]);
 

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
 import { useHLSBroadcast } from '@/hooks/useHLSBroadcast';
 import { useRequestHost } from '@/hooks/useMusicRequests';
@@ -24,7 +24,7 @@ import { useEffect } from 'react';
 
 const Index = () => {
   const engine = useAudioEngine();
-  const server = useServerDeck(); // always initialized — used in SERVER_MODE
+  const server = useServerDeck();
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const { settings, channels } = useCloudSettings();
@@ -45,37 +45,39 @@ const Index = () => {
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [newPlaylistDeck, setNewPlaylistDeck] = useState<DeckId>('A');
 
-  // Load jingle if configured
+  // Load browser-mode jingle if configured in settings
   useEffect(() => {
     if (settings.jingle_url) {
       fetch(settings.jingle_url)
         .then(r => r.arrayBuffer())
         .then(b => engine.setCustomJingle(b))
-        .catch(() => { });
+        .catch(() => {});
     }
   }, [settings.jingle_url]);
 
   // ── Library: load track to deck ─────────────────────────────────────────
-  // SERVER_MODE: only tell server — no browser audio
-  // BROWSER_MODE: fetch file + play locally + tell server to stream
+  // FIX: Load does NOT auto-play — user must press Play on the deck
   const loadLibraryTrackToDeck = useCallback(async (track: LibraryTrack, deck: DeckId) => {
     if (SERVER_MODE) {
+      // Server mode: send load command — track is staged, not played
       await server.loadTrack(deck, track);
       return;
     }
-    // Browser mode
+    // Browser mode: fetch file and stage it (loadTrack does NOT call .play())
     try {
       const fileRes = await fetch(`${STREAMING_SERVER}/library/audio/${encodeURIComponent(track.serverName)}`);
       if (!fileRes.ok) throw new Error('Audio file not found on server');
       const blob = await fileRes.blob();
       const file = new File([blob], track.name, { type: blob.type || 'audio/mpeg' });
+      // FIX: loadTrack only calls audio.load(), NOT audio.play()
       engine.loadTrack(deck, file);
+      // Tell server about the loaded track (for metadata tracking)
       await fetch(`${STREAMING_SERVER}/deck/${deck}/load`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ serverName: track.serverName, loop: false }),
       });
-      toast.success(`▶ "${track.name}" on Deck ${deck}`);
+      toast.success(`"${track.name}" loaded to Deck ${deck} — press ▶ to play`);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       toast.error(`Could not load to deck: ${message}`);
@@ -83,10 +85,6 @@ const Index = () => {
   }, [engine, server]);
 
   // ── Playlist: play on deck ────────────────────────────────────────────────
-  // In server mode, playPlaylistOnDeck already sends to the API correctly
-  // (it calls STREAMING_SERVER/deck/:deck/playlist which Liquidsoap handles)
-
-  // ── Create playlist shortcut ──────────────────────────────────────────────
   const handleCreatePlaylistFromTrack = useCallback((track: LibraryTrack) => {
     setPendingTrackForPlaylist(track);
     setNewPlaylistName('My Playlist');
@@ -127,20 +125,25 @@ const Index = () => {
   };
 
   // ── Mic ───────────────────────────────────────────────────────────────────
+  // FIX: Server mode mic — MicSection now handles jingle play internally,
+  // so handleStartMic only needs to duck the music and mark mic active.
   const handleStartMic = async () => {
     const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
 
     if (SERVER_MODE) {
-      // In server mode, NO browser audio, NO getUserMedia
-      engine.setMicActiveOnly(true); // just visual state
+      engine.setMicActiveOnly(true);
       try {
+        // /mic/start on server now:
+        // 1. Queues jingle on stream (listeners hear it)
+        // 2. Ducks music to 5% after jingle finishes
         await fetch(`${STREAMING_SERVER}/mic/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ targets: micTarget === 'all' ? ['ALL'] : targets }),
         });
-        toast.success(`Broadcasting mic to ${micTarget === 'all' ? 'All Decks' : targets.join(', ')}`);
-      } catch (e) { console.warn('[Mic] /mic/start failed:', e); }
+      } catch (e) {
+        console.warn('[Mic] /mic/start failed:', e);
+      }
       return;
     }
 
@@ -152,19 +155,20 @@ const Index = () => {
     const targets: DeckId[] = micTarget === 'all' ? [...ALL_DECKS] : (micTarget as DeckId[]);
 
     if (SERVER_MODE) {
-      engine.setMicActiveOnly(false); // just visual state
+      engine.setMicActiveOnly(false);
       try {
         await fetch(`${STREAMING_SERVER}/mic/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ targets: micTarget === 'all' ? ['ALL'] : targets }),
         });
-        toast.success('Mic stopped');
-      } catch (e) { console.warn('[Mic] /mic/stop failed:', e); }
+        toast.success('Mic off — music restored to 100%');
+      } catch (e) {
+        console.warn('[Mic] /mic/stop failed:', e);
+      }
       return;
     }
 
-    // Browser mode
     engine.stopMic();
   };
 
@@ -177,7 +181,6 @@ const Index = () => {
         fallbackCopy(text, msg);
       }
     } catch (e) {
-      console.warn('[Clipboard] Native API failed, using fallback:', e);
       fallbackCopy(text, msg);
     }
   };
@@ -190,8 +193,7 @@ const Index = () => {
       document.body.removeChild(el);
       if (successful) toast.success(msg);
       else throw new Error('execCommand failed');
-    } catch (err) {
-      console.warn('[Clipboard] Fallback failed:', err);
+    } catch {
       toast.info('Please copy manually: ' + text);
     }
   };
@@ -202,7 +204,6 @@ const Index = () => {
     copyToClipboard(`${window.location.origin}/request?host=${requestPeerId}`, 'Request link copied!');
   };
 
-  // serverDeckInfo shape expected by PlaylistPanel (raw object)
   const serverDeckInfoForPlaylists: Record<string, ServerDeckInfo> = SERVER_MODE
     ? Object.fromEntries(ALL_DECKS.map(id => [id, server.decks[id]]))
     : {};
@@ -254,7 +255,7 @@ const Index = () => {
             </div>
           )}
 
-          {/* ── Server mode VLC instructions (shown once when online) ────── */}
+          {/* ── Server mode VLC instructions ────── */}
           {SERVER_MODE && server.serverOnline && (
             <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 flex flex-wrap items-center gap-3">
               <Radio className="h-4 w-4 text-primary shrink-0" />
@@ -285,7 +286,6 @@ const Index = () => {
                   key={id}
                   id={id}
                   channelName={ch?.name}
-                  // Server mode props
                   serverState={SERVER_MODE ? server.decks[id] : undefined}
                   onServerPlay={SERVER_MODE ? () => server.play(id) : undefined}
                   onServerPause={SERVER_MODE ? () => server.pause(id) : undefined}
@@ -294,9 +294,9 @@ const Index = () => {
                   onServerAutoDJ={SERVER_MODE ? (enabled) => server.setAutoDJ(id, enabled) : undefined}
                   onServerStartStream={SERVER_MODE ? () => server.startStream(id) : undefined}
                   onServerStopStream={SERVER_MODE ? () => server.stopStream(id) : undefined}
-                  // Browser mode props
                   browserState={!SERVER_MODE ? engine.decks[id] : undefined}
                   analyser={!SERVER_MODE ? engine.getAnalyser(id) : undefined}
+                  // FIX: browser onBrowserLoad only stages the file, does NOT auto-play
                   onBrowserLoad={!SERVER_MODE ? (f) => { addTracks([f]); engine.loadTrack(id, f); } : undefined}
                   onBrowserPlay={!SERVER_MODE ? () => engine.play(id) : undefined}
                   onBrowserPause={!SERVER_MODE ? () => engine.pause(id) : undefined}
@@ -363,7 +363,6 @@ const Index = () => {
           {/* ── Bottom row: Mic / Broadcast / Requests ───────────────────── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
-            {/* Mic — always shown (browser mic routes to Icecast via live harbor) */}
             <MicSection
               micActive={engine.micActive}
               jinglePlaying={engine.jinglePlaying}
@@ -387,11 +386,12 @@ const Index = () => {
               {SERVER_MODE ? (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    Server streams automatically via Icecast. Open VLC on Windows to listen:
+                    Each deck streams independently via Icecast. Use ON/OFF on each deck to control broadcasting.
                   </p>
                   {ALL_DECKS.map(id => (
                     <div key={id} className="flex items-center gap-2">
                       <span className={`text-xs font-bold ${DECK_COLORS[id].class}`}>{id}</span>
+                      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${server.decks[id].streaming ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
                       <code className="flex-1 bg-background rounded px-2 py-1 text-[10px] font-mono truncate">
                         {getDeckStreamUrl(id)}
                       </code>

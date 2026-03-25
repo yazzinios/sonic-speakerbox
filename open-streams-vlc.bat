@@ -19,7 +19,7 @@ if %VLC%=="" (
 
 REM Change localhost to your server IP if running remotely
 set SERVER=localhost
-set PORT=8000
+set PORT=8001
 
 echo Starting SonicBeat streams in VLC...
 echo Server: %SERVER%:%PORT%

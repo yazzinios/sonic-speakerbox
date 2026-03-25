@@ -59,13 +59,13 @@ docker compose up -d
 | Service | URL |
 |---|---|
 | DJ Console | `http://YOUR_IP:8083` |
-| Icecast Streams | `http://YOUR_IP:8000/deck-a` through `/deck-d` |
+| Icecast Streams | `http://YOUR_IP:8001/deck-a` through `/deck-d` |
 | API | `http://YOUR_IP/api` |
 
 ### Listen in VLC (Windows)
 
 ```
-Media → Open Network Stream → http://YOUR_IP:8000/deck-a
+Media → Open Network Stream → http://YOUR_IP:8001/deck-a
 ```
 
 ---
@@ -96,7 +96,7 @@ export const SERVER_MODE = true; // or false
 ┌──────────────────▼──────────────────────────────┐
 │               radio-server container            │
 │  Node.js API + Liquidsoap + Icecast             │
-│  /deck-a  /deck-b  /deck-c  /deck-d  :8000      │
+│  /deck-a  /deck-b  /deck-c  /deck-d  :8001      │
 └──────────────────┬──────────────────────────────┘
                    │ stream
 ┌──────────────────▼──────────────────────────────┐

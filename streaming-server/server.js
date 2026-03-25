@@ -674,7 +674,7 @@ app.get('/deck-info', (req, res) => {
       playlist:       s.playlist,
       autoDJEnabled:  s.autoDJEnabled,
       autoDJActive:   !s.liveActive,
-      streamUrl:      `http://${req.hostname}:8000/deck-${deck.toLowerCase()}`,
+      streamUrl:      `http://${req.hostname}:8001/deck-${deck.toLowerCase()}`,
     };
   }
   res.json(info);

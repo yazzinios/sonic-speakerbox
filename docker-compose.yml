@@ -7,7 +7,7 @@ services:
         VITE_SUPABASE_PROJECT_ID: "${VITE_SUPABASE_PROJECT_ID}"
         VITE_SUPABASE_PUBLISHABLE_KEY: "${VITE_SUPABASE_PUBLISHABLE_KEY}"
         VITE_SUPABASE_URL: "${VITE_SUPABASE_URL}"
-    container_name: sonicbeat
+    # container_name: sonicbeat # Removed to avoid naming conflicts on redeploy
     ports:
       - "8083:80"
     restart: always
@@ -20,9 +20,9 @@ services:
   radio-server:
     build:
       context: ./streaming-server
-    container_name: radio-server
+    # container_name: radio-server # Removed to avoid naming conflicts on redeploy
     ports:
-      - "8000:8000"   # Icecast — VLC connects here: http://YOUR_IP:8000/deck-a
+      - "8001:8000"   # Icecast — VLC connects here: http://YOUR_IP:8001/deck-a
     environment:
       # FIX: 127.0.0.1 — Liquidsoap and Icecast are in the SAME container
       # Using "localhost" can fail on some Docker builds; 127.0.0.1 is explicit

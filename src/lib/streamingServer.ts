@@ -18,7 +18,7 @@ export const STREAMING_SERVER = "/api";
 export const STREAM_BASE = "/stream";
 
 /** Direct Icecast port — use this for VLC and external players */
-export const ICECAST_PORT = 8000;
+export const ICECAST_PORT = 8001;
 
 /** Direct Icecast base (host:port) — use in external player URLs */
 export const ICECAST_BASE = `${window.location.hostname}:${ICECAST_PORT}`;

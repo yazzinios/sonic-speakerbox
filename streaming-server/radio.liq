@@ -28,7 +28,7 @@ def make_channel(name, mountpoint) =
 
   # Harbor: live DJ mic / browser audio
   mic = input.harbor(
-    "/mic/deck-#{string.case(lower=true, name)}",
+    "/mic/#{mountpoint}",
     port     = harbor_port,
     password = icecast_password,
     buffer   = 0.2,   # FIX: was 0.5 — less buffering = lower sync latency
